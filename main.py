@@ -30,7 +30,7 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS active_polls (poll_id TEXT PRIMARY 
 conn.commit()
 
 # 3. ODAM ANATOMIYASI VA SALOMATLIGIDAN MUKAMMAL TESTLAR BAZASI (35 TA PREMIUM SAVOL)
-BIOLOGY_QUIZZES = [
+BIOLOGY_QUIZZES = []
     {
         "q": "Odam organizmida qaysi gormon qondagi kalsiy miqdorini kamaytirishga xizmat qiladi?",
         "o": ["Paratgormon", "Kalsitonin", "Tiroksin", "Aldosteron"],
@@ -89,7 +89,7 @@ BIOLOGY_QUIZZES = [
         "q": "Me'da shirasi tarkibidagi qaysi modda pepsinojen fermentini faollashtiradi va bakteriyalarni o'ldiradi?",
         "o": ["Xolat kislotasi", "Xlorid kislotasi (HCl)", "Lozotsim", "Pankreatin"],
         "c": 1,
-        "e": "Me'da qoplama hujayralaridan ajraladigan xlorid kislotasi (HCl) muhitni kislotali qibly, fermentlarni faollashtiradi va dezinfeksiya qiladi."
+        "e": "Me'da qoplama hujayralaridan ajraladigan xlorid kislotasi (HCl) muhitni kislotali qilib, fermentlarni faollashtiradi va dezinfeksiya qiladi."
     },
     {
         "q": "Qaysi vitamin yetishmasligi oqibatida odamda qonning ivish xususiyati pasayib ketadi?",
@@ -184,5 +184,6 @@ BIOLOGY_QUIZZES = [
     {
         "q": "O'pkaning hayotiy sig'imi qaysi asbob yordamida o'lchanadi?",
         "o": ["Tonometr", "Spirometr", "Stetoskop", "Sfigmograf"],
-    },   
+    },    
+
 
