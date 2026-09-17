@@ -62,7 +62,7 @@ BIOLOGY_QUIZZES = [
         "e": "Oqsillar parchalanishidan hosil bo'lgan zaharli ammiak moddasi jigarda mochevinaga aylantiriladi, buyrak esa uni shunchaki filtrlab chiqaradi."
     },
     {
-        "q": "Insonda qon guruhini aniqlovchi agglyutinogenlar hujayraning qaysi qismida joyhazgan?",
+        "q": "Insonda qon guruhini aniqlovchi agglyutinogenlar hujayraning qaysi qismida joylashgan?",
         "o": ["Qon plazmasida", "Eritrotsitlar membranasida", "Leykotsitlar yadrosida", "Trombotsitlarda"],
         "c": 1,
         "e": "A va B agglyutinogenlar (antigenlar) eritrotsitlar yuzasidagi tashqi membranasida joylashgan bo'ladi."
@@ -89,7 +89,7 @@ BIOLOGY_QUIZZES = [
         "q": "Me'da shirasi tarkibidagi qaysi modda pepsinojen fermentini faollashtiradi va bakteriyalarni o'ldiradi?",
         "o": ["Xolat kislotasi", "Xlorid kislotasi (HCl)", "Lozotsim", "Pankreatin"],
         "c": 1,
-        "e": "Me'da qoplama hujayralaridan ajraladigan xlorid kislotasi (HCl) muhitni kislotali qilib, fermentlarni faollashtiradi va dezinfeksiya qiladi."
+        "e": "Me'da qoplama hujayralaridan ajraladigan xlorid kislotasi (HCl) muhitni kislotali qibly, fermentlarni faollashtiradi va dezinfeksiya qiladi."
     },
     {
         "q": "Qaysi vitamin yetishmasligi oqibatida odamda qonning ivish xususiyati pasayib ketadi?",
@@ -149,7 +149,7 @@ BIOLOGY_QUIZZES = [
         "q": "Odam organizmida eritrotsitlar asosan qayerda parchalanadi?",
         "o": ["Sariq ilikda", "Taloq va jigarda", "O'pkada", "Buyrak usti bezida"],
         "c": 1,
-        "e": "Qarigan va shikastlangan eritrotsitlar asosan taloqda ('eritrotsitlar qabristoni') va jigarda yo'q qilinadi."
+        "e": "Qarigan va shikastlangan eritrotsitlar asosan taloqda va jigarda yo'q qilinadi."
     },
     {
         "q": "Katta qon aylanish doirasi yurakning qaysi kamerasidan boshlanadi?",
@@ -183,3 +183,5 @@ BIOLOGY_QUIZZES = [
     },
     {
         "q": "O'pkaning hayotiy sig'imi qaysi asbob yordamida o'lchanadi?",
+        "o": ["Tonometr", "Spirometr", "Stetoskop", "Sfigmograf"],
+
