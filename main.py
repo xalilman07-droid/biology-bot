@@ -184,4 +184,5 @@ BIOLOGY_QUIZZES = [
     {
         "q": "O'pkaning hayotiy sig'imi qaysi asbob yordamida o'lchanadi?",
         "o": ["Tonometr", "Spirometr", "Stetoskop", "Sfigmograf"],
+    },   
 
