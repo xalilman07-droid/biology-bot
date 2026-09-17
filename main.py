@@ -13,10 +13,10 @@ from aiohttp import web
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Render-dan tokenni o'qiymiz
+# Render advanced bo'limidagi xavfsiz BOT_TOKENni o'qiymiz
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("Xatolik: BOT_TOKEN topilmadi!")
+    raise ValueError("Xatolik: BOT_TOKEN topilmadi! Render muhitiga token kiriting.")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -29,184 +29,157 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY,
 cursor.execute('''CREATE TABLE IF NOT EXISTS active_polls (poll_id TEXT PRIMARY KEY, user_id INTEGER, quiz_index INTEGER)''')
 conn.commit()
 
-# 3. BIOLOGIYA TESTLARI (IZOHLARI BILAN)
+# 3. ODAM ANATOMIYASI VA SALOMATLIGIDAN MUKAMMAL TESTLAR BAZASI (35 TA PREMIUM SAVOL)
 BIOLOGY_QUIZZES = [
     {
-        "q": "O'simlik hujayrasining qobig'i nimadan iborat?", 
-        "o": ["Selyuloza", "Xitin", "Glikokaliks", "Murein"], 
-        "c": 0,
-        "e": "O'simlik hujayra devori asosan selyuloza (kletchatka)dan iborat. Xitin zamburug'larda, murein esa bakteriyalarda bo'ladi."
-    },
-    {
-        "q": "Fotosintez jarayoni hujayraning qaysi organoidida kechadi?", 
-        "o": ["Mitoxondriya", "Xloroplast", "Ribosoma", "Lizosoma"], 
+        "q": "Odam organizmida qaysi gormon qondagi kalsiy miqdorini kamaytirishga xizmat qiladi?",
+        "o": ["Paratgormon", "Kalsitonin", "Tiroksin", "Aldosteron"],
         "c": 1,
-        "e": "Fotosintez jarayoni o'simliklarning yashil qismi bo'lgan xloroplastlarda quyosh nuri ta'sirida amalga oshadi."
+        "e": "Qalqonsimon bezdan chiquvchi Kalsitonin gormoni kalsiyni qondan suyakka o'tkazib, qondagi miqdorini kamaytiradi."
     },
     {
-        "q": "Odamda nechta qovurg'a bor?", 
-        "o": ["10 juft", "11 juft", "12 juft", "13 juft"], 
+        "q": "Yurak qorinchalari sistolasi (qisqarishi) qancha vaqt davom etadi?",
+        "o": ["0.1 soniya", "0.3 soniya", "0.4 soniya", "0.8 soniya"],
+        "c": 1,
+        "e": "Yurak siklining 0.3 soniyasida qorinchalar qisqarib, qonni yirik qon tomirlariga (aorta va o'pka arteriyasiga) haydaydi."
+    },
+    {
+        "q": "Nerv impulsining bitta neyrondan ikkinchisiga o'tish joyi qanday nomlanadi?",
+        "o": ["Akson", "Dendrit", "Sinaps", "Medulla"],
         "c": 2,
-        "e": "Sog'lom odam skeletida 12 juft, ya'ni jami 24 ta qovurg'a to'sh suyagiga va umurtqalarga birikkan bo'ladi."
+        "e": "Sinaps — nerv oxirlarining boshqa neyron yoki ishchi organ bilan tutashgan va kimyoviy (mediator) yo'l bilan impuls o'tuvchi qismidir."
     },
     {
-        "q": "DNK tarkibiga kirmaydigan azotli asosni toping.", 
-        "o": ["Adenin", "Timin", "Sitozin", "Urasil"], 
+        "q": "Odamda miya ko'prigi va uzunchoq miya markaziy nerv tizimining qaysi qismiga kiradi?",
+        "o": ["O'rta miya", "Orqa miya", "Varoliy ko'prigi", "Rombmonand (ortki) miya"],
         "c": 3,
-        "e": "Urasil faqat RNK tarkibida bo'ladi. DNKda esa uning o'rnida Timin asosi qatnashadi."
+        "e": "Uzunchoq miya va miya ko'prigi anatomik jihatdan rombmonand miya tarkibiy qismlari hisoblanadi."
     },
     {
-        "q": "Yurak necha kameradan iborat?", 
-        "o": ["2", "3", "4", "5"], 
-        "c": 2,
-        "e": "Sutemizuvchilar va odamda yurak 4 ta kameradan (2 ta bo'lmacha va 2 ta qorinchadan) iborat."
-    },
-    {
-        "q": "Gidra qaysi tipga kiradi?", 
-        "o": ["Bo'shliqichlilar", "Yassi qurtlar", "Bo'g'imoyoqlilar", "Molyuskalar"], 
-        "c": 0,
-        "e": "Chuchuk suv gidrasi ko'p hujayrali hayvonlarning Bo'shliqichlilar (Coelenterata) tipiga mansub."
-    },
-    {
-        "q": "Qonning qizil hujayralari qanday nomlanadi?", 
-        "o": ["Leykotsitlar", "Trombotsitlar", "Eritrotsitlar", "Limfotsitlar"], 
-        "c": 2,
-        "e": "Eritrotsitlar tarkibida gemoglobin bo'lganligi sababli qizil rangda bo'ladi va kislorod tashishga xizmat qiladi."
-    },
-    {
-        "q": "O'simliklarda suv transportini qaysi guruh to'qimalari bajaradi?", 
-        "o": ["Ksilema", "Floema", "Kambiy", "Epiderma"], 
-        "c": 0,
-        "e": "Ksilema (yog'ochlik naylari) suv va mineral moddalarni ildizdan tepaga o'tkazadi. Floema esa organik moddalarni tashiydi."
-    },
-    {
-        "q": "Insonda necha juft xromosoma bor?", 
-        "o": ["22 juft", "23 juft", "24 juft", "46 juft"], 
+        "q": "Odam organizmida urea (mochevina) sintezi asosan qaysi organda amalga oshadi?",
+        "o": ["Buyrakda", "Jigarda", "O'pkada", "Oshqozon osti bezida"],
         "c": 1,
-        "e": "Odam hujayrasida jami 46 ta xromosoma bor, bular o'zaro 23 juft bo'lib joylashadi (22 juft autosoma, 1 juft jinsiy xromosoma)."
+        "e": "Oqsillar parchalanishidan hosil bo'lgan zaharli ammiak moddasi jigarda mochevinaga aylantiriladi, buyrak esa uni shunchaki filtrlab chiqaradi."
     },
     {
-        "q": "Zamburug'lar hujayra devori nimadan iborat?", 
-        "o": ["Selyuloza", "Xitin", "Murein", "Pektin"], 
+        "q": "Insonda qon guruhini aniqlovchi agglyutinogenlar hujayraning qaysi qismida joylashgan?",
+        "o": ["Qon plazmasida", "Eritrotsitlar membranasida", "Leykotsitlar yadrosida", "Trombotsitlarda"],
         "c": 1,
-        "e": "Zamburug'lar hujayra qobig'i uglevod hisoblangan xitin moddasidan tashkil topgan bo'ladi."
-    }
-]
-
-# 4. /START TUGMASI ISHLASHI
-@dp.message(CommandStart())
-async def start_cmd(message: types.Message):
-    user_id = message.from_user.id
-    name = message.from_user.full_name
-    
-    # Bazada o'quvchini yangilash
-    cursor.execute("INSERT OR REPLACE INTO users (user_id, name, ball) VALUES (?, ?, 0)", (user_id, name))
-    conn.commit()
-    
-    await message.answer(
-        f"Salom {name}! 👋\nBiologiya fanidan kunlik test imtihoniga xush kelibsiz.\n\n"
-        f"Sizga hozir **10 ta tasodifiy test** yuboriladi. Har bir javob ortidan to'g'ri javob izohi chiqadi. Omad!"
-    )
-    
-    # 10 ta tasodifiy testni olish
-    shuffled_quizzes = list(enumerate(BIOLOGY_QUIZZES))
-    selected = random.sample(shuffled_quizzes, k=min(10, len(BIOLOGY_QUIZZES)))
-    
-    # Ketma-ket yuborish
-    for idx, quiz in selected:
-        poll = await message.answer_poll(
-            question=quiz["q"],
-            options=quiz["o"],
-            type="quiz",
-            correct_option_id=quiz["c"],
-            explanation=quiz["e"],       # O'QUVCHI UCHUN TO'G'RI JAVOB IZOHI
-            is_anonymous=False           # KIM QAYSI VARIANTNI TANLAGANINI BILISH UCHUN!
-        )
-        cursor.execute("INSERT OR REPLACE INTO active_polls (poll_id, user_id, quiz_index) VALUES (?, ?, ?)", 
-                       (poll.poll.id, user_id, idx))
-    conn.commit()
-
-# 5. O'QUVCHILAR QAYSI VARIANTNI TANLAGANINI LOGLASH VA BALL QO'SHISH
-@dp.poll_answer()
-async def handle_poll_answer(quiz_answer: PollAnswer):
-    poll_id = quiz_answer.poll_id
-    user_name = quiz_answer.user.full_name
-    selected_option = quiz_answer.option_ids[0] if quiz_answer.option_ids else None
-    
-    cursor.execute("SELECT user_id, quiz_index FROM active_polls WHERE poll_id = ?", (poll_id,))
-    res = cursor.fetchone()
-    
-    if res and selected_option is not None:
-        user_id, quiz_index = res
-        quiz_data = BIOLOGY_QUIZZES[quiz_index]
-        
-        chosen_text = quiz_data["o"][selected_option]
-        correct_option = quiz_data["c"]
-        
-        # Terminal/Logda kim nima belgilaganini ko'rsatish
-        logger.info(f"O'quvchi: {user_name} | Savol: {quiz_data['q']} | Tanladi: {chosen_text}")
-        
-        # To'g'ri topsa ball qo'shish
-        if selected_option == correct_option:
-            cursor.execute("UPDATE users SET ball = ball + 1 WHERE user_id = ?", (user_id,))
-            conn.commit()
-
-# 6. KUN YAKUNIDA 5 BALLIK TIZIMDA BAHOLASH (HAR KUNI SOAT 20:00 DA)
-async def daily_grading():
-    cursor.execute("SELECT user_id, name, ball FROM users")
-    users = cursor.fetchall()
-    
-    for user in users:
-        user_id, name, ball = user
-        
-        # 5 ballik baholash mezoni
-        if ball >= 9:
-            baho = "5 (A'lo) 🏆"
-        elif ball >= 7:
-            baho = "4 (Yaxshi) 🌟"
-        elif ball >= 5:
-            baho = "3 (Qoniqarli) 🔍"
-        else:
-            baho = "2 (Qoniqarsiz) 📚 Yana o'qishingiz kerak!"
-            
-        text = (f"📊 **Kunlik Imtihon Yakuni:**\n\n"
-                f"👤 O'quvchi: {name}\n"
-                f"✅ To'g'ri javoblar: {ball}/10 ta\n"
-                f"🎯 Bugungi bahongiz: **{baho}**\n\n"
-                f"Ertaga yangi testlarda ko'rishguncha!")
-        try:
-            await bot.send_message(chat_id=user_id, text=text, parse_mode="Markdown")
-        except Exception as e:
-            logger.error(f"Xabar yuborishda xato ({user_id}): {e}")
-            
-    # Ertangi kun uchun bazani tozalash
-    cursor.execute("DELETE FROM active_polls")
-    cursor.execute("UPDATE users SET ball = 0")
-    conn.commit()
-
-# 7. RENDER UXLAMASLIGI UCHUN VEB-SERVER (HTTP PORT)
-async def handle_http(request):
-    return web.Response(text="Biologiya Quiz Bot 24/7 Muammosiz Ishlamoqda!")
-
-async def main():
-    # Taymerni ishga tushirish (20:00 da baholaydi)
-    scheduler.add_job(daily_grading, 'cron', hour=20, minute=0)
-    scheduler.start()
-    
-    # Botni fonda ishga tushirish
-    asyncio.create_task(dp.start_polling(bot))
-    
-    # Render talab qiladigan Web portni ochish
-    app = web.Application()
-    app.router.add_get('/', handle_http)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    port = int(os.getenv("PORT", 8080))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    
-    while True:
-        await asyncio.sleep(3600)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        "e": "A va B agglyutinogenlar (antigenlar) eritrotsitlar yuzasidagi tashqi membranasida joylashgan bo'ladi."
+    },
+    {
+        "q": "Eshittirish a'zosi bo'lgan Korti organi ichki quloqning qaysi qismida joylashgan?",
+        "o": ["Dahlizda", "Yarim doira naylarida", "Chig'anoqda (Salyangoz)", "Nog'ora bo'shlig'ida"],
+        "c": 2,
+        "e": "Ichki quloqdagi chig'anoq (cochlea) kanallari ichida tovush to'lqinlarini qabul qiluvchi reseptor hujayralardan iborat Korti organi joylashgan."
+    },
+    {
+        "q": "Odamda ko'zning to'r pardasida (Setchatka) rangni idrok etuvchi reseptorlar qanday ataladi?",
+        "o": ["Tayoqchalar", "Kolbachalar", "Neyronlar", "Xrustalik"],
+        "c": 1,
+        "e": "Kolbachalar (kodlar) rangli ko'rish va kunduzgi yorug'likka javob beradi. Tayoqchalar esa oq-qorani va g'ira-shira qorong'ulikni sezadi."
+    },
+    {
+        "q": "Odam skeletida o'zaro harakatsiz birikkan suyaklar guruhini aniqlang.",
+        "o": ["Umurtqalar", "Ensa va tepa suyaklari", "Yelka va bilak", "Kaft va barmoq"],
+        "c": 1,
+        "e": "Kalla suyagining ensa, chakka va tepa suyaklari choklar yordamida bir-biri bilan mutlaqo harakatsiz birikkan."
+    },
+    {
+        "q": "Me'da shirasi tarkibidagi qaysi modda pepsinojen fermentini faollashtiradi va bakteriyalarni o'ldiradi?",
+        "o": ["Xolat kislotasi", "Xlorid kislotasi (HCl)", "Lozotsim", "Pankreatin"],
+        "c": 1,
+        "e": "Me'da qoplama hujayralaridan ajraladigan xlorid kislotasi (HCl) muhitni kislotali qilib, fermentlarni faollashtiradi va dezinfeksiya qiladi."
+    },
+    {
+        "q": "Qaysi vitamin yetishmasligi oqibatida odamda qonning ivish xususiyati pasayib ketadi?",
+        "o": ["A vitamini", "C vitamini", "E vitamini", "K vitamini"],
+        "c": 3,
+        "e": "K vitamini jigarda prothrombin (qon ivituvchi omil) sintezlanishi uchun zarur. U yetishmasa, qon to'xtashi qiyinlashadi."
+    },
+    {
+        "q": "Odam tanasida eng katta limfa tomiri qaysi bo'shliq bo'ylab o'tadi va qayerga quyiladi?",
+        "o": ["Ko'krak yo'li, chap o'mrov osti venasiga", "Qorin yo'li, darvoza venasiga", "O'ng limfa yo'li, uyqu arteriyasiga", "Aorta yo'li, yurakka"],
+        "c": 0,
+        "e": "Eng yirik ko'krak limfa yo'li qorin bo'shlig'idan boshlanib, chap o'mrov osti venasiga quyiladi."
+    },
+    {
+        "q": "Insonda nafas olish markazi bosh miyaning qaysi qismida joylashgan?",
+        "o": ["O'rta miyada", "Uzunchoq miyada", "Oraliq miyada", "Miyachada"],
+        "c": 1,
+        "e": "Hayotiy muhim markazlar (nafas olish, qon aylanish, yutish, qusish) uzunchoq miyada joylashgan."
+    },
+    {
+        "q": "Qon plazmasidagi qaysi oqsil immun tizimida antitanachalar (antikor) vazifasini bajaradi?",
+        "o": ["Albuminlar", "Fibrinogen", "Gamma-globulinlar", "Gemoglobin"],
+        "c": 2,
+        "e": "Gamma-globulinlar (immunoglobulinlar) organizmga kirgan yot antigenlarni neytrallovchi himoya oqsillaridir."
+    },
+    {
+        "q": "Ko'richakning chuvalchangsimon o'simtasi (appendiks) immun tizimida qanday organga kiradi?",
+        "o": ["Markaziy organ", "Periferik limfoid organ", "Endokrin bez", "Hazm bezi"],
+        "c": 1,
+        "e": "Appendiks va bodomcha bezlari periferik limfoid a'zolar hisoblanib, limfotsitlar to'planishi va himoyani ta'minlaydi."
+    },
+    {
+        "q": "Odamda qaysi parazit gijja to'g'ridan-to'g'ri o'pka alveolalarini zararlab, keyin ichakka o'tadi?",
+        "o": ["Giyox qurt (Ostriki)", "Gofman qurti", "Ascaris lumbricoides (Askarida)", "Exinokokk"],
+        "c": 2,
+        "e": "Askarida lichinkalari qon orqali o'pka alveolalariga chiqadi, nafas yo'li orqali tomoqqa kelib, qayta yutilgach ichakda voyaga yetadi."
+    },
+    {
+        "q": "Insonda insipid (qandsiz diabet) kasalligi qaysi gormon yetishmovchiligidan kelib chiqadi?",
+        "o": ["Insulin", "Vazopressin (Antidiuretik gormon)", "Oksitotsin", "Glukagon"],
+        "c": 1,
+        "e": "Gipotalamusdan chiqib gipofizda saqlanuvchi Vazopressin kamayganda buyrakda suv so'rilishi buziladi va odam sutkasiga 10-15 litr suv yo'qotadi."
+    },
+    {
+        "q": "Buyrak jomining yallig'lanishi bilan kechadigan og'ir kasallik qanday nomlanadi?",
+        "o": ["Sistit", "Nefrit", "Piyelonefrit", "Uretradit"],
+        "c": 2,
+        "e": "Piyelonefrit — buyrak to'qimasi va buyrak jomining bakteriyalar ta'sirida yallig'lanishi hisoblanadi."
+    },
+    {
+        "q": "Ko'z qorachig'ining kengayishi va qisqarishi qaysi nerv tizimi tomonidan boshqariladi?",
+        "o": ["Faqat simpatik", "Vegetativ (Simpatik va Parasimpatik)", "Somatik nerv tizimi", "Faqat markaziy"],
+        "c": 1,
+        "e": "Simpatik nerv ko'z qorachig'ini kengaytiradi (qo'rqqanda), parasimpatik nerv esa toraytiradi. Bular vegetativ tizimga kiradi."
+    },
+    {
+        "q": "Odam organizmida eritrotsitlar asosan qayerda parchalanadi?",
+        "o": ["Sariq ilikda", "Taloq va jigarda", "O'pkada", "Buyrak usti bezida"],
+        "c": 1,
+        "e": "Qarigan va shikastlangan eritrotsitlar asosan taloqda ('eritrotsitlar qabristoni') va jigarda yo'q qilinadi."
+    },
+    {
+        "q": "Katta qon aylanish doirasi yurakning qaysi kamerasidan boshlanadi?",
+        "o": ["O'ng bo'lmacha", "O'ng qorinchadan", "Chap bo'lmachadan", "Chap qorinchadan"],
+        "c": 3,
+        "e": "Katta qon aylanish doirasi chap qorinchadan aorta qon tomiri bilan boshlanadi."
+    },
+    {
+        "q": "Nafas chiqarilganda havo tarkibidagi karbonat angidrid (CO2) miqdori taxminan necha foizni tashkil etadi?",
+        "o": ["0.03%", "4%", "16%", "21%"],
+        "c": 1,
+        "e": "Kiritilgan havoda CO2 0.03% bo'lsa, o'pkadan chiqarilgan havoda uning miqdori 4% gacha ko'payadi."
+    },
+    {
+        "q": "Odamda tirsak va tizza bo'g'imlari anatomik tuzilishiga ko'ra qaysi turga kiradi?",
+        "o": ["Yassi bo'g'imlar", "Egarsimon bo'g'imlar", "Bloksimon (oshidli) bo'g'imlar", "Sharsimon bo'g'imlar"],
+        "c": 2,
+        "e": "Tirsak va tizza faqat bir tomonga (bukilish va yozilish) harakatlanadigan bloksimon bo'g'imlardir."
+    },
+    {
+        "q": "Qaysi gormon yetishmovchiligi bolalarda kretinizm (jismoniy va aqliy o'sishdan orqada qolish) kasalligini keltirib chiqaradi?",
+        "o": ["O'sish gormoni (STG)", "Tiroksin", "Insulin", "Adrenalin"],
+        "c": 1,
+        "e": "Yoshlik davrida qalqonsimon bezdan Tiroksin gormoni kam ajralsa, moddalar almashinuvi sekinlashib, kretinizmga sabab bo'ladi."
+    },
+    {
+        "q": "Insonda eshitish zonasi bosh miya yarimsharlari po'stlog'ining qaysi bo'lagida joylashgan?",
+        "o": ["Ensa bo'lagida", "Peshona bo'lagida", "Chakka bo'lagida", "Tepa bo'lagida"],
+        "c": 2,
+        "e": "Ensa bo'lagida ko'rish markazi, Chakka bo'lagida esa eshitish va hid bilish markazlari joylashgan."
+    },
+    {
+        "q": "O'pkaning hayotiy sig'imi qaysi asbob yordamida o'lchanadi?",
