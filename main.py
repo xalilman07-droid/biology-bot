@@ -44,7 +44,7 @@ BIOLOGY_QUIZZES = [
         "e": "Yurak siklining 0.3 soniyasida qorinchalar qisqarib, qonni yirik qon tomirlariga (aorta va o'pka arteriyasiga) haydaydi."
     },
     {
-        "q": "Nerv impulsining bitta neyrondan ikkinchisiga o'tish joyi qanday nomlanadi?",
+        "q": "Nerv impulsining bitta neyrondan ikkinchisiga o'tish join qanday nomlanadi?",
         "o": ["Akson", "Dendrit", "Sinaps", "Medulla"],
         "c": 2,
         "e": "Sinaps — nerv oxirlarining boshqa neyron yoki ishchi organ bilan tutashgan va kimyoviy (mediator) yo'l bilan impuls o'tuvchi qismidir."
@@ -77,7 +77,7 @@ BIOLOGY_QUIZZES = [
         "q": "Odamda ko'zning to'r pardasida (Setchatka) rangni idrok etuvchi reseptorlar qanday ataladi?",
         "o": ["Tayoqchalar", "Kolbachalar", "Neyronlar", "Xrustalik"],
         "c": 1,
-        "e": "Kolbachalar (kodlar) rangli ko'rish va kunduzgi yorug'likka javob beradi. Tayoqchalar esa oq-qorani va g'ira-shira qorong'ulikni sezadi."
+        "e": "Kolbachalar (kodlar) rangli ko'rish va kunduzgi yorug'likka javob bedari. Tayoqchalar esa oq-qorani va g'ira-shira qorong'ulikni sezadi."
     },
     {
         "q": "Odam skeletida o'zaro harakatsiz birikkan suyaklar guruhini aniqlang.",
@@ -89,7 +89,7 @@ BIOLOGY_QUIZZES = [
         "q": "Me'da shirasi tarkibidagi qaysi modda pepsinojen fermentini faollashtiradi va bakteriyalarni o'ldiradi?",
         "o": ["Xolat kislotasi", "Xlorid kislotasi (HCl)", "Lozotsim", "Pankreatin"],
         "c": 1,
-        "e": "Me'da qoplama hujayralaridan ajraladigan xlorid kislotasi (HCl) muhitni kislotali qilib, fermentlarni faollashtiradi va dezinfeksiya qiladi."
+        "e": "Me'da qoplama hujayralaridan ajraladigan xlorid kislotasi (HCl) muhitni kislotali qibly, fermentlarni faollashtiradi va dezinfeksiya qiladi."
     },
     {
         "q": "Qaysi vitamin yetishmasligi oqibatida odamda qonning ivish xususiyati pasayib ketadi?",
@@ -105,7 +105,7 @@ BIOLOGY_QUIZZES = [
     },
     {
         "q": "Insonda nafas olish markazi bosh miyaning qaysi qismida joylashgan?",
-        "o": ["O'rta miyada", "Uzunchoq miyada", "Oraliq miyada", "Miyachada"],
+        "o": ["O'rata miyada", "Uzunchoq miyada", "Oraliq miyada", "Miyachada"],
         "c": 1,
         "e": "Hayotiy muhim markazlar (nafas olish, qon aylanish, yutish, qusish) uzunchoq miyada joylashgan."
     },
