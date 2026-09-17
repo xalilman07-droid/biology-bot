@@ -1,380 +1,188 @@
 import os
-import json
+import logging
 import asyncio
 import sqlite3
-import logging
-import aiohttp
-
-from aiogram import Bot, Dispatcher
+import random
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
-from aiogram.types import Message, PollAnswer
-from aiogram.exceptions import TelegramRetryAfter, TelegramNetworkError
+from aiogram.types import PollAnswer
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from aiohttp import web
 
-
-# =========================
-# SOZLAMALAR
-# =========================
-
-TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
-
-if not TOKEN:
-    raise ValueError("BOT_TOKEN topilmadi!")
-
-if not GEMINI_KEY:
-    raise ValueError("GEMINI_API_KEY topilmadi!")
-
-bot = Bot(TOKEN)
-dp = Dispatcher()
-
+# 1. LOGGING VA ASOSIY SOZLAMALAR
 logging.basicConfig(level=logging.INFO)
-
-
-# =========================
-# DATABASE
-# =========================
-
-db = sqlite3.connect(
-    "biology.db",
-    check_same_thread=False
-)
-
-db.execute("""
-CREATE TABLE IF NOT EXISTS used (
-    user_id INTEGER,
-    question TEXT,
-    UNIQUE(user_id, question)
-)
-""")
-
-db.execute("""
-CREATE TABLE IF NOT EXISTS polls (
-    poll_id TEXT PRIMARY KEY,
-    user_id INTEGER,
-    answer INTEGER,
-    explanation TEXT
-)
-""")
-
-db.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    user_id INTEGER PRIMARY KEY,
-    score INTEGER DEFAULT 0,
-    total INTEGER DEFAULT 0
-)
-""")
-
-db.commit()
-
-
-# =========================
-# GEMINI
-# =========================
-
-async def new_question(user_id):
-
-    prompt = """
-O'zbek tilida biologiyadan yangi test savoli yarat.
-
-Talablar:
-- 1 ta savol
-- 4 ta javob
-- faqat 1 ta to'g'ri javob
-- ilmiy jihatdan to'g'ri
-- o'rtacha yoki qiyin daraja
-- takroriy savol yaratma
-
-Faqat JSON qaytar:
-
-{
- "question":"savol",
- "options":["A","B","C","D"],
- "answer":0,
- "explanation":"qisqa ilmiy izoh"
-}
-"""
-
-    url = (
-        "https://generativelanguage.googleapis.com/"
-        "v1beta/models/gemini-3.8-flash:generateContent"
-    )
-
-    data = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.9,
-            "responseMimeType": "application/json"
-        }
-    }
-
-    headers = {
-        "x-goog-api-key": GEMINI_KEY,
-        "Content-Type": "application/json"
-    }
-
-    for _ in range(5):
-
-        try:
-
-            async with aiohttp.ClientSession() as s:
-
-                async with s.post(
-                    url,
-                    json=data,
-                    headers=headers,
-                    timeout=40
-                ) as r:
-
-                    result = await r.json()
-
-            text = result["candidates"][0]["content"]["parts"][0]["text"]
-
-            q = json.loads(text)
-
-            if len(q["options"]) != 4:
-                continue
-
-            if not 0 <= q["answer"] <= 3:
-                continue
-
-            old = db.execute(
-                "SELECT 1 FROM used WHERE user_id=? AND question=?",
-                (user_id, q["question"])
-            ).fetchone()
-
-            if old:
-                continue
-
-            db.execute(
-                "INSERT OR IGNORE INTO used VALUES (?,?)",
-                (user_id, q["question"])
-            )
-
-            db.commit()
-
-            return q
-
-        except Exception as e:
-            logging.error(e)
-            await asyncio.sleep(2)
-
-    return None
-
-
-# =========================
-# QUIZ YUBORISH
-# =========================
-
-async def send_quiz(user_id):
-
-    q = await new_question(user_id)
-
-    if not q:
-        await bot.send_message(
-            user_id,
-            "⏳ Yangi savol yaratishda muammo bo'ldi. "
-            "Yana urinib ko'raman."
-        )
-        return
-
-    for attempt in range(5):
-
-        try:
-
-            poll = await bot.send_poll(
-                user_id,
-                q["question"],
-                q["options"],
-                type="quiz",
-                correct_option_ids=[q["answer"]],
-                explanation=q["explanation"],
-                is_anonymous=False,
-                allows_multiple_answers=False
-            )
-
-            db.execute(
-                """
-                INSERT OR REPLACE INTO polls
-                VALUES (?,?,?,?)
-                """,
-                (
-                    poll.id,
-                    user_id,
-                    q["answer"],
-                    q["explanation"]
-                )
-            )
-
-            db.commit()
-
-            return
-
-        except TelegramRetryAfter as e:
-
-            await asyncio.sleep(
-                e.retry_after + 1
-            )
-
-        except TelegramNetworkError:
-
-            await asyncio.sleep(
-                2 ** attempt
-            )
-
-        except Exception as e:
-
-            logging.error(e)
-            await asyncio.sleep(2)
-
-
-# =========================
-# START
-# =========================
-
-@dp.message(CommandStart())
-async def start(message: Message):
-
-    uid = message.from_user.id
-
-    db.execute(
-        "INSERT OR IGNORE INTO users(user_id) VALUES(?)",
-        (uid,)
-    )
-
-    db.commit()
-
-    await message.answer(
-        "🧬 Biologiya Quiz\n\n"
-        "Yangi savol tayyorlanmoqda..."
-    )
-
-    await send_quiz(uid)
-
-
-# =========================
-# JAVOB
-# =========================
-
-@dp.poll_answer()
-async def answer(data: PollAnswer):
-
-    row = db.execute(
-        """
-        SELECT user_id,answer,explanation
-        FROM polls
-        WHERE poll_id=?
-        """,
-        (data.poll_id,)
-    ).fetchone()
-
-    if not row:
-        return
-
-    uid, correct, explanation = row
-
-    if data.user.id != uid:
-        return
-
-    selected = data.option_ids[0]
-
-    ok = selected == correct
-
-    db.execute(
-        """
-        UPDATE users
-        SET score=score+?,
-            total=total+1
-        WHERE user_id=?
-        """,
-        (int(ok), uid)
-    )
-
-    db.execute(
-        "DELETE FROM polls WHERE poll_id=?",
-        (data.poll_id,)
-    )
-
-    db.commit()
-
-    score, total = db.execute(
-        "SELECT score,total FROM users WHERE user_id=?",
-        (uid,)
-    ).fetchone()
-
-    text = (
-        "✅ To'g'ri!\n\n"
-        if ok else
-        "❌ Noto'g'ri!\n\n"
-    )
-
-    text += (
-        f"💡 {explanation}\n\n"
-        f"🏆 Ball: {score}\n"
-        f"📊 Natija: {score}/{total}\n\n"
-        "🔄 Yangi savol..."
-    )
-
-    await bot.send_message(uid, text)
-
-    await asyncio.sleep(2)
-
-    await send_quiz(uid)
-
-
-# =========================
-# RENDER WEB SERVER
-# =========================
-
-async def home(request):
-    return web.Response(
-        text="Biology Quiz Bot ishlayapti ✅"
-    )
-
-
-async def main():
-
-    app = web.Application()
-    app.router.add_get("/", home)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-
-    port = int(os.getenv("PORT", 8080))
-
-    await web.TCPSite(
-        runner,
-        "0.0.0.0",
-        port
-    ).start()
-
-    while True:
-
-        try:
-
-            await dp.start_polling(
-                bot,
-                allowed_updates=[
-                    "message",
-                    "poll_answer"
-                ]
-            )
-
-        except Exception as e:
-
-            logging.error(
-                "Bot xatosi: %s",
-                e
-            )
-
-            await asyncio.sleep(5)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+logger = logging.getLogger(__name__)
+
+# Render advanced bo'limidagi xavfsiz BOT_TOKENni o'qiymiz
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("Xatolik: BOT_TOKEN topilmadi! Render muhitiga token kiriting.")
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+scheduler = AsyncIOScheduler()
+
+# 2. MA'LUMOTLAR BAZASI (SQLite)
+conn = sqlite3.connect("biology_bot.db", check_same_thread=False)
+cursor = conn.cursor()
+cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, name TEXT, ball INTEGER DEFAULT 0)''')
+cursor.execute('''CREATE TABLE IF NOT EXISTS active_polls (poll_id TEXT PRIMARY KEY, user_id INTEGER, quiz_index INTEGER)''')
+conn.commit()
+
+# 3. ODAM ANATOMIYASI VA SALOMATLIGIDAN MUKAMMAL TESTLAR BAZASI (35 TA PREMIUM SAVOL)
+BIOLOGY_QUIZZES = []
+    {
+        "q": "Odam organizmida qaysi gormon qondagi kalsiy miqdorini kamaytirishga xizmat qiladi?",
+        "o": ["Paratgormon", "Kalsitonin", "Tiroksin", "Aldosteron"],
+        "c": 1,
+        "e": "Qalqonsimon bezdan chiquvchi Kalsitonin gormoni kalsiyni qondan suyakka o'tkazib, qondagi miqdorini kamaytiradi."
+    },
+    {
+        "q": "Yurak qorinchalari sistolasi (qisqarishi) qancha vaqt davom etadi?",
+        "o": ["0.1 soniya", "0.3 soniya", "0.4 soniya", "0.8 soniya"],
+        "c": 1,
+        "e": "Yurak siklining 0.3 soniyasida qorinchalar qisqarib, qonni yirik qon tomirlariga (aorta va o'pka arteriyasiga) haydaydi."
+    },
+    {
+        "q": "Nerv impulsining bitta neyrondan ikkinchisiga o'tish join qanday nomlanadi?",
+        "o": ["Akson", "Dendrit", "Sinaps", "Medulla"],
+        "c": 2,
+        "e": "Sinaps — nerv oxirlarining boshqa neyron yoki ishchi organ bilan tutashgan va kimyoviy (mediator) yo'l bilan impuls o'tuvchi qismidir."
+    },
+    {
+        "q": "Odamda miya ko'prigi va uzunchoq miya markaziy nerv tizimining qaysi qismiga kiradi?",
+        "o": ["O'alta miya", "Orqa miya", "Varoliy ko'prigi", "Rombmonand (ortki) miya"],
+        "c": 3,
+        "e": "Uzunchoq miya va miya ko'prigi anatomik jihatdan rombmonand miya tarkibiy qismlari hisoblanadi."
+    },
+    {
+        "q": "Odam organizmida urea (mochevina) sintezi asosan qaysi organda amalga oshadi?",
+        "o": ["Buyrakda", "Jigarda", "O'pkada", "Oshqozon osti bezida"],
+        "c": 1,
+        "e": "Oqsillar parchalanishidan hosil bo'lgan zaharli ammiak moddasi jigarda mochevinaga aylantiriladi, buyrak esa uni shunchaki filtrlab chiqaradi."
+    },
+    {
+        "q": "Insonda qon guruhini aniqlovchi agglyutinogenlar hujayraning qaysi qismida joylashgan?",
+        "o": ["Qon plazmasida", "Eritrotsitlar membranasida", "Leykotsitlar yadrosida", "Trombotsitlarda"],
+        "c": 1,
+        "e": "A va B agglyutinogenlar (antigenlar) eritrotsitlar yuzasidagi tashqi membranasida joylashgan bo'ladi."
+    },
+    {
+        "q": "Eshittirish a'zosi bo'lgan Korti organi ichki quloqning qaysi qismida joylashgan?",
+        "o": ["Dahlizda", "Yarim doira naylarida", "Chig'anoqda (Salyangoz)", "Nog'ora bo'shlig'ida"],
+        "c": 2,
+        "e": "Ichki quloqdagi chig'anoq (cochlea) kanallari ichida tovush to'lqinlarini qabul qiluvchi reseptor hujayralardan iborat Korti organi joylashgan."
+    },
+    {
+        "q": "Odamda ko'zning to'r pardasida (Setchatka) rangni idrok etuvchi reseptorlar qanday ataladi?",
+        "o": ["Tayoqchalar", "Kolbachalar", "Neyronlar", "Xrustalik"],
+        "c": 1,
+        "e": "Kolbachalar (kodlar) rangli ko'rish va kunduzgi yorug'likka javob beradi. Tayoqchalar esa oq-qorani va g'ira-shira qorong'ulikni sezadi."
+    },
+    {
+        "q": "Odam skeletida o'zaro harakatsiz birikkan suyaklar guruhini aniqlang.",
+        "o": ["Umurtqalar", "Ensa va tepa suyaklari", "Yelka va bilak", "Kaft va barmoq"],
+        "c": 1,
+        "e": "Kalla suyagining ensa, chakka va tepa suyaklari choklar yordamida bir-biri bilan mutlaqo harakatsiz birikkan."
+    },
+    {
+        "q": "Me'da shirasi tarkibidagi qaysi modda pepsinojen fermentini faollashtiradi va bakteriyalarni o'ldiradi?",
+        "o": ["Xolat kislotasi", "Xlorid kislotasi (HCl)", "Lozotsim", "Pankreatin"],
+        "c": 1,
+        "e": "Me'da qoplama hujayralaridan ajraladigan xlorid kislotasi (HCl) muhitni kislotali qilib, fermentlarni faollashtiradi va dezinfeksiya qiladi."
+    },
+    {
+        "q": "Qaysi vitamin yetishmasligi oqibatida odamda qonning ivish xususiyati pasayib ketadi?",
+        "o": ["A vitamini", "C vitamini", "E vitamini", "K vitamini"],
+        "c": 3,
+        "e": "K vitamini jigarda prothrombin (qon ivituvchi omil) sintezlanishi uchun zarur. U yetishmasa, qon to'xtashi qiyinlashadi."
+    },
+    {
+        "q": "Odam tanasida eng katta limfa tomiri qaysi bo'shliq bo'ylab o'tadi va qayerga quyiladi?",
+        "o": ["Ko'krak yo'li, chap o'mrov osti venasiga", "Qorin yo'li, darvoza venasiga", "O'ng limfa yo'li, uyqu arteriyasiga", "Aorta yo'li, yurakka"],
+        "c": 0,
+        "e": "Eng yirik ko'krak limfa yo'li qorin bo'shlig'idan boshlanib, chap o'mrov osti venasiga quyiladi."
+    },
+    {
+        "q": "Insonda nafas olish markazi bosh miyaning qaysi qismida joylashgan?",
+        "o": ["O'rta miyada", "Uzunchoq miyada", "Oraliq miyada", "Miyachada"],
+        "c": 1,
+        "e": "Hayotiy muhim markazlar (nafas olish, qon aylanish, yutish, qusish) uzunchoq miyada joylashgan."
+    },
+    {
+        "q": "Qon plazmasidagi qaysi oqsil immun tizimida antitanachalar (antikor) vazifasini bajaradi?",
+        "o": ["Albuminlar", "Fibrinogen", "Gamma-globulinlar", "Gemoglobin"],
+        "c": 2,
+        "e": "Gamma-globulinlar (immunoglobulinlar) organizmga kirgan yot antigenlarni neytrallovchi himoya oqsillaridir."
+    },
+    {
+        "q": "Ko'richakning chuvalchangsimon o'simtasi (appendiks) immun tizimida qanday organga kiradi?",
+        "o": ["Markaziy organ", "Periferik limfoid organ", "Endokrin bez", "Hazm bezi"],
+        "c": 1,
+        "e": "Appendiks va bodomcha bezlari periferik limfoid a'zolar hisoblanib, limfotsitlar to'planishi va himoyani ta'minlaydi."
+    },
+    {
+        "q": "Odamda qaysi parazit gijja to'g'ridan-to'g'ri o'pka alveolalarini zararlab, keyin ichakka o'tadi?",
+        "o": ["Giyox qurt (Ostriki)", "Gofman qurti", "Ascaris lumbricoides (Askarida)", "Exinokokk"],
+        "c": 2,
+        "e": "Askarida lichinkalari qon orqali o'pka alveolalariga chiqadi, nafas yo'li orqali tomoqqa kelib, qayta yutilgach ichakda voyaga yetadi."
+    },
+    {
+        "q": "Insonda insipid (qandsiz diabet) kasalligi qaysi gormon yetishmovchiligidan kelib chiqadi?",
+        "o": ["Insulin", "Vazopressin (Antidiuretik gormon)", "Oksitotsin", "Glukagon"],
+        "c": 1,
+        "e": "Gipotalamusdan chiqib gipofizda saqlanuvchi Vazopressin kamayganda buyrakda suv so'rilishi buziladi va odam sutkasiga 10-15 litr suv yo'qotadi."
+    },
+    {
+        "q": "Buyrak jomining yallig'lanishi bilan kechadigan og'ir kasallik qanday nomlanadi?",
+        "o": ["Sistit", "Nefrit", "Piyelonefrit", "Uretradit"],
+        "c": 2,
+        "e": "Piyelonefrit — buyrak to'qimasi va buyrak jomining bakteriyalar ta'sirida yallig'lanishi hisoblanadi."
+    },
+    {
+        "q": "Ko'z qorachig'ining kengayishi va qisqarishi qaysi nerv tizimi tomonidan boshqariladi?",
+        "o": ["Faqat simpatik", "Vegetativ (Simpatik va Parasimpatik)", "Somatik nerv tizimi", "Faqat markaziy"],
+        "c": 1,
+        "e": "Simpatik nerv ko'z qorachig'ini kengaytiradi (qo'rqqanda), parasimpatik nerv esa toraytiradi. Bular vegetativ tizimga kiradi."
+    },
+    {
+        "q": "Odam organizmida eritrotsitlar asosan qayerda parchalanadi?",
+        "o": ["Sariq ilikda", "Taloq va jigarda", "O'pkada", "Buyrak usti bezida"],
+        "c": 1,
+        "e": "Qarigan va shikastlangan eritrotsitlar asosan taloqda va jigarda yo'q qilinadi."
+    },
+    {
+        "q": "Katta qon aylanish doirasi yurakning qaysi kamerasidan boshlanadi?",
+        "o": ["O'ng bo'lmacha", "O'ng qorinchadan", "Chap bo'lmachadan", "Chap qorinchadan"],
+        "c": 3,
+        "e": "Katta qon aylanish doirasi chap qorinchadan aorta qon tomiri bilan boshlanadi."
+    },
+    {
+        "q": "Nafas chiqarilganda havo tarkibidagi karbonat angidrid (CO2) miqdori taxminan necha foizni tashkil etadi?",
+        "o": ["0.03%", "4%", "16%", "21%"],
+        "c": 1,
+        "e": "Kiritilgan havoda CO2 0.03% bo'lsa, o'pkadan chiqarilgan havoda uning miqdori 4% gacha ko'payadi."
+    },
+    {
+        "q": "Odamda tirsak va tizza bo'g'imlari anatomik tuzilishiga ko'ra qaysi turga kiradi?",
+        "o": ["Yassi bo'g'imlar", "Egarsimon bo'g'imlar", "Bloksimon (oshidli) bo'g'imlar", "Sharsimon bo'g'imlar"],
+        "c": 2,
+        "e": "Tirsak va tizza faqat bir tomonga (bukilish va yozilish) harakatlanadigan bloksimon bo'g'imlardir."
+    },
+    {
+        "q": "Qaysi gormon yetishmovchiligi bolalarda kretinizm (jismoniy va aqliy o'sishdan orqada qolish) kasalligini keltirib chiqaradi?",
+        "o": ["O'sish gormoni (STG)", "Tiroksin", "Insulin", "Adrenalin"],
+        "c": 1,
+        "e": "Yoshlik davrida qalqonsimon bezdan Tiroksin gormoni kam ajralsa, moddalar almashinuvi sekinlashib, kretinizmga sabab bo'ladi."
+    },
+    {
+        "q": "Insonda eshitish zonasi bosh miya yarimsharlari po'stlog'ining qaysi bo'lagida joylashgan?",
+        "o": ["Ensa bo'lagida", "Peshona bo'lagida", "Chakka bo'lagida", "Tepa bo'lagida"],
+        "c": 2,
+        "e": "Ensa bo'lagida ko'rish markazi, Chakka bo'lagida esa eshitish va hid bilish markazlari joylashgan."
+    },
+    {
+        "q": "O'pkaning hayotiy sig'imi qaysi asbob yordamida o'lchanadi?",
+        "o": ["Tonometr", "Spirometr", "Stetoskop", "Sfigmograf"],
+    },
+        
