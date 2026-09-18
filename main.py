@@ -98,3 +98,6 @@ if **name** == '**main**': 
 ### Render'da fon rejimida doimiy ishlashi uchun polling ishga tushuramiz
 
 executor.start_polling(dp, skip_updates=True)
+
+
+
