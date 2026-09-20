@@ -43,33 +43,39 @@ def generate_biology_quizzes():
     ]
     Eslatma: "c" - bu to'g'ri javobning indeksi (0, 1, 2 yoki 3).
     """
-    try:
-        response = ai_client.models.generate_content(
-            model="gemini-1.5-flash",  # Rasmiy va to'g'ri model nomi
-            contents=prompt
-        )
-        text = response.text.strip()
-        
-        if "```" in text:
-            text = text.split("```")[1]
-            if text.startswith("json"):
-                text = text[4:]
-        
-        data = json.loads(text.strip())
-        if isinstance(data, list) and len(data) > 0:
-            return data
-        else:
-            raise ValueError("Noto'g'ri ma'lumot olindi")
-    except Exception as e:
-        logging.error(f"Gemini API xatoligi: {e}")
-        # Zaxira savollar ro'yxati (Xatolik bo'lganda ishlaydi)
-        return [
-            {"q": "O'simlik hujayrasining qobig'i nimadan iborat?", "o": ["Selyuloza", "Xitin", "Glikokaliks", "Murein"], "c": 0},
-            {"q": "Yurak necha kameradan iborat?", "o": ["2", "3", "4", "5"], "c": 2},
-            {"q": "Fotosintez qaysi organoidda kechadi?", "o": ["Mitoxondriya", "Xloroplast", "Ribosoma", "Lizosoma"], "c": 1},
-            {"q": "DNK tarkibiga kirmaydigan azotli asosni toping.", "o": ["Adenin", "Timin", "Sitozin", "Urasil"], "c": 3},
-            {"q": "Insonda necha juft xromosoma bor?", "o": ["22 juft", "23 juft", "24 juft", "46 juft"], "c": 1}
-        ]
+    
+    # Ishlaydigan modelni avtomatik aniqlash uchun ro'yxat
+    models_to_try = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash-latest"]
+    
+    for model_name in models_to_try:
+        try:
+            response = ai_client.models.generate_content(
+                model=model_name,
+                contents=prompt
+            )
+            text = response.text.strip()
+            
+            if "```" in text:
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            
+            data = json.loads(text.strip())
+            if isinstance(data, list) and len(data) > 0:
+                logging.info(f"Muvaffaqiyatli ishlatilgan model: {model_name}")
+                return data
+        except Exception as e:
+            logging.warning(f"Model {model_name} xatolik berdi: {e}")
+            continue
+
+    logging.error("Barcha Gemini modellari xatolik berdi. Zaxira savollari ishlatilmoqda.")
+    return [
+        {"q": "O'simlik hujayrasining qobig'i nimadan iborat?", "o": ["Selyuloza", "Xitin", "Glikokaliks", "Murein"], "c": 0},
+        {"q": "Yurak necha kameradan iborat?", "o": ["2", "3", "4", "5"], "c": 2},
+        {"q": "Fotosintez qaysi organoidda kechadi?", "o": ["Mitoxondriya", "Xloroplast", "Ribosoma", "Lizosoma"], "c": 1},
+        {"q": "DNK tarkibiga kirmaydigan azotli asosni toping.", "o": ["Adenin", "Timin", "Sitozin", "Urasil"], "c": 3},
+        {"q": "Insonda necha juft xromosoma bor?", "o": ["22 juft", "23 juft", "24 juft", "46 juft"], "c": 1}
+    ]
 
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
