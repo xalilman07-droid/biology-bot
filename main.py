@@ -28,17 +28,46 @@ cursor.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY,
 cursor.execute('''CREATE TABLE IF NOT EXISTS active_polls (poll_id TEXT PRIMARY KEY, user_id INTEGER)''')
 conn.commit()
 
-# 3. GEMINI AI ORQALI HAR SAFAR YANGI VA UNIKAL TESTLAR GENERATSIYA QILISH
+# 3. KATTA LOKAL SAVOLLAR BAZASI (AI ishlamay qolganda yoki zaxira uchun)
+LARGE_BACKUP_QUIZZES = [
+    {"q": "O'simlik hujayrasining qobig'i nimadan iborat?", "o": ["Selyuloza", "Xitin", "Glikokaliks", "Murein"], "c": 0},
+    {"q": "Yurak necha kameradan iborat?", "o": ["2", "3", "4", "5"], "c": 2},
+    {"q": "Fotosintez qaysi organoidda kechadi?", "o": ["Mitoxondriya", "Xloroplast", "Ribosoma", "Lizosoma"], "c": 1},
+    {"q": "DNK tarkibiga kirmaydigan azotli asosni toping.", "o": ["Adenin", "Timin", "Sitozin", "Urasil"], "c": 3},
+    {"q": "Insonda necha juft xromosoma bor?", "o": ["22 juft", "23 juft", "24 juft", "46 juft"], "c": 1},
+    {"q": "Qaysi qon guruhi umumiy donor hisoblanadi?", "o": ["I (0)", "II (A)", "III (B)", "IV (AB)"], "c": 0},
+    {"q": "Hujayraning 'energetik stansiyasi' qaysi organoid?", "o": ["Mitoxondriya", "Lizosoma", "Yadro", "Golji majmuasi"], "c": 0},
+    {"q": "Odam organizmidagi eng uzun suyak qaysi?", "o": ["Son suyagi", "Yelka suyagi", "Lobiya suyagi", "Qovurg'a"], "c": 0},
+    {"q": "Qonning qizil hujayralari nima deb ataladi?", "o": ["Eritrotsitlar", "Leykotsitlar", "Trombotsitlar", "Neironlar"], "c": 0},
+    {"q": "O'simliklarda suv va mineral moddalarni o'tkazuvchi to'qima?", "o": ["Ksilema", "Floema", "Kambiy", "Epidermis"], "c": 0},
+    {"q": "Bakteriyalar qaysi dunyoga kiradi?", "o": ["Prokariotlar", "Eukariotlar", "Zamburug'lar", "Viruslar"], "c": 0},
+    {"q": "Odamda ovqat hazm qilish jarayoni qayerdan boshlanadi?", "o": ["Og'iz bo'shlig'idan", "Oshqozondan", "Qizilo'ngachdan", "O'nikki barmoqli ichakdan"], "c": 0},
+    {"q": "Nuklein kislotalarni kim kashf etgan?", "o": ["Misher", "Uotson va Krik", "Mendel", "Darvin"], "c": 0},
+    {"q": "Zamburug'lar hujayra devori nimadan tashkil topgan?", "o": ["Xitin", "Selyuloza", "Murein", "Lignin"], "c": 0},
+    {"q": "Inson tana haroratini boshqaruvchi miya bo'limi?", "o": ["Gipotalamus", "Miyacha", "Uzunchoq miya", "Oraliq miya"], "c": 0},
+    {"q": "Gipofiz bezi qaysi sistemaga kiradi?", "o": ["Endokrin", "Asab", "Qon aylanish", "Ayirish"], "c": 0},
+    {"q": "O'simliklarda gaz almashinuvi qaysi a'zo orqali kechadi?", "o": ["Og'izchalar (Ustitsam)", "Tomirlar", "Ildiz tukchalari", "Po'stloq"], "c": 0},
+    {"q": "Oqsil sintezi qaysi organoidda amalga oshiriladi?", "o": ["Ribosoma", "Mitoxondriya", "Lizosoma", "Peroksisoma"], "c": 0},
+    {"q": "Genetika fanining asoschisi kim?", "o": ["Gregor Mendel", "Charlz Darvin", "Lamarck", "Toxir"], "c": 0},
+    {"q": "Odam tanasidagi eng katta bez qaysi?", "o": ["Jigar", "Oshqozon osti bezi", "Qalqonsimon bez", "So'lak bezi"], "c": 0},
+    {"q": "O'simliklarga yashil rang beruvchi pigment?", "o": ["Xlorofill", "Karotin", "Ksantofill", "Antotsian"], "c": 0},
+    {"q": "Viruslar qanday tuzilishga ega?", "o": ["Hujayrasiz", "Bir hujayrali", "Kop hujayrali", "Yadroviy"], "c": 0},
+    {"q": "Nerv sistemasining struktura va funksional birligi?", "o": ["Neiron", "Nefron", "Osteotsit", "Miot sit"], "c": 0},
+    {"q": "Buyrakning funksional birligi nima deb ataladi?", "o": ["Nefron", "Neiron", "Alveola", "Lobula"], "c": 0},
+    {"q": "O'pka pufakchalari nima deb ataladi?", "o": ["Alveola", "Bronxiola", "Nefron", "Villi"], "c": 0}
+]
+
+# 4. AI VA LOKAL BAZADAN SAVOL OLISH
 def generate_biology_quizzes():
-    topics = ["Zoologiya", "Botanika", "Anatomiya", "Genetika", "Sitologiya", "Ekologiya", "Evolyutsiya", "Biokimyo"]
+    topics = ["Zoologiya", "Botanika", "Anatomiya", "Genetika", "Sitologiya", "Ekologiya", "Evolyutsiya", "Biokimyo", "Mikrobiologiya"]
     selected_topic = random.choice(topics)
-    seed = random.randint(1000, 9999)
+    seed = random.randint(10000, 99999)
 
     prompt = f"""
-    Biologiya fanining '{selected_topic}' bo'limidan 5 ta mutlaqo YANGI, UNIKAL va qiziqarli test savolini tuz.
-    Savollar va variantlar ilgari berilgan standart savollardan farq qilsin (Random ID: {seed}).
+    Biologiyaning '{selected_topic}' sohasi bo'yicha 5 ta mutlaqo YANGI va turlicha test savollarini tayyorla.
+    Oldingi berilgan savollar takrorlanmasin (Unique ID: {seed}).
     
-    Javobni FAQAT quyidagi JSON formatida ber, ortiqcha matn va belgilar bo'lmasin:
+    Javobni FAQAT quyidagi JSON formatida ber, ortiqcha matnsiz:
     [
       {{
         "q": "Savol matni",
@@ -46,10 +75,10 @@ def generate_biology_quizzes():
         "c": 0
       }}
     ]
-    Eslatma: "c" - bu to'g'ri javobning indeksi (0, 1, 2 yoki 3).
+    "c" - bu to'g'ri javob indeksi (0, 1, 2 yoki 3).
     """
     
-    models_to_try = ["gemini-3.6-flash", "gemini-1.5-flash", "gemini-2.0-flash-exp"]
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash-exp", "gemini-1.5-flash"]
     
     for model_name in models_to_try:
         try:
@@ -64,28 +93,19 @@ def generate_biology_quizzes():
             text = response.text.strip()
             data = json.loads(text)
             
-            if isinstance(data, list) and len(data) > 0:
-                logging.info(f"Muvaffaqiyatli ishlatilgan model: {model_name} (Mavzu: {selected_topic})")
-                return data
+            if isinstance(data, list) and len(data) >= 5:
+                logging.info(f"AI orqali savollar yaratildi: {model_name} (Mavzu: {selected_topic})")
+                return data[:5]
         except Exception as e:
             logging.warning(f"Model {model_name} xatolik berdi: {e}")
             continue
 
-    logging.error("Barcha Gemini modellari xatolik berdi. Zaxira savollari ishlatilmoqda.")
+    logging.error("AI so'rovi muvaffaqiyatsiz bo'ldi. Lokal savollar bazasidan foydalanilmoqda.")
     
-    backup_questions = [
-        {"q": "O'simlik hujayrasining qobig'i nimadan iborat?", "o": ["Selyuloza", "Xitin", "Glikokaliks", "Murein"], "c": 0},
-        {"q": "Yurak necha kameradan iborat?", "o": ["2", "3", "4", "5"], "c": 2},
-        {"q": "Fotosintez qaysi organoidda kechadi?", "o": ["Mitoxondriya", "Xloroplast", "Ribosoma", "Lizosoma"], "c": 1},
-        {"q": "DNK tarkibiga kirmaydigan azotli asosni toping.", "o": ["Adenin", "Timin", "Sitozin", "Urasil"], "c": 3},
-        {"q": "Insonda necha juft xromosoma bor?", "o": ["22 juft", "23 juft", "24 juft", "46 juft"], "c": 1},
-        {"q": "Qaysi qon guruhi umumiy donor hisoblanadi?", "o": ["I (0)", "II (A)", "III (B)", "IV (AB)"], "c": 0},
-        {"q": "Hujayraning 'energetik stansiyasi' qaysi organoid?", "o": ["Mitoxondriya", "Lizosoma", "Yadro", "Golji majmuasi"], "c": 0}
-    ]
-    random.shuffle(backup_questions)
-    return backup_questions[:5]
+    # AI ishlamasa, katta bazadan tasodifiy 5 ta savol ajratib olinadi (hech qachon bir xil ketma-ketlik bo'lmaydi)
+    return random.sample(LARGE_BACKUP_QUIZZES, 5)
 
-# 4. BOT BUYRUQLARI VA ISHLOVCHILARI
+# 5. BOT HANDLERLARI
 @dp.message(Command("start"))
 async def start_cmd(message: types.Message):
     user_id = message.from_user.id
@@ -93,7 +113,7 @@ async def start_cmd(message: types.Message):
     cursor.execute("INSERT OR REPLACE INTO users (user_id, name, ball) VALUES (?, ?, 0)", (user_id, name))
     conn.commit()
     
-    msg = await message.answer(f"Salom {name}! AI biologiyadan yangi va takrorlanmas savollarni tayyorlamoqda, biroz kuting... 🧠")
+    msg = await message.answer(f"Salom {name}! Biologiyadan yangi savollar yuklanmoqda... 🧠")
     
     quizzes = generate_biology_quizzes()
     await msg.delete()
@@ -120,7 +140,7 @@ async def handle_poll_answer(quiz_answer: PollAnswer):
         cursor.execute("UPDATE users SET ball = ball + 1 WHERE user_id = ?", (user_id,))
         conn.commit()
 
-# 5. KUNLIK BAHOLASH SCHEDULERI
+# 6. KUNLIK NATIJALAR
 async def daily_grading():
     cursor.execute("SELECT user_id, name, ball FROM users")
     users = cursor.fetchall()
@@ -136,11 +156,11 @@ async def daily_grading():
     cursor.execute("UPDATE users SET ball = 0")
     conn.commit()
 
-# 6. HTTP SERVER (Render va UptimeRobot uchun)
+# 7. HTTP SERVER (Render uchun)
 async def handle_http(request):
-    return web.Response(text="Bot va Gemini AI muvaffaqiyatli ishlayapti!")
+    return web.Response(text="Bot va AI muvaffaqiyatli ishlayapti!")
 
-# 7. ASOSIY ISHGA TUSHIRISH
+# 8. ASOSIY ISHGA TUSHIRISH
 async def main():
     scheduler.add_job(daily_grading, 'cron', hour=20, minute=0)
     scheduler.start()
