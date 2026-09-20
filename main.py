@@ -2,7 +2,10 @@ import os
 import json
 import logging
 import random
-from aiogram import Bot, Dispatcher, executor, types
+import asyncio
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.types import Message
 import google.generativeai as genai
 from questions import BIOLOGY_QUESTIONS
 
@@ -17,67 +20,63 @@ if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()
 
-# Google API uchun ishlaydigan eng yangi modellar ro'yxati
+# Ishlaydigan model nomlari (birinchisi ishlamasa keyingisiga o'tadi)
 MODELS_TO_TRY = [
-    "gemini-2.5-flash",
     "gemini-1.5-flash-latest",
-    "gemini-1.5-pro-latest"
+    "gemini-1.5-pro-latest",
+    "gemini-pro"
 ]
 
 def get_ai_question():
-    """Gemini AI orqali biologik savol va javoblar yaratish"""
-    if not GEMINI_API_KEY:
-        return None
-
-    prompt = (
-        "Menga biologiya fanidan 1 ta o'rta yoki murakkab darajadagi test savolini tayyorlab ber. "
-        "Javob faqat va faqat quyidagi JSON formatida bo'lsin, hech qanday ortiqcha matn ham, markdown ham bo'lmasin:\n"
-        '{"q": "Savol matni", "o": ["Variant A", "Variant B", "Variant C", "Variant D"], "c": 0}\n'
-        "Bu yerda 'c' - to'g'ri javobning indeksi (0, 1, 2 yoki 3)."
-    )
-
-    for model_name in MODELS_TO_TRY:
-        try:
-            model = genai.GenerativeModel(model_name)
-            response = model.generate_content(prompt)
-            if response and response.text:
-                clean_text = response.text.strip().replace("```json", "").replace("```", "")
-                data = json.loads(clean_text)
-                logging.info(f"AI savoli olindi, ishlatilgan model: {model_name}")
+    """Gemini API orqali yangi savol oladi, agar ishlamasa lokal bazadan qaytaradi."""
+    if GEMINI_API_KEY:
+        prompt = (
+            "Biologiya fanidan ko'p variantli (A, B, C, D) 1 ta test savoli tuzing. "
+            "Javobni quyidagi JSON formatida qaytaring:\n"
+            "{\n"
+            '  "question": "Savol matni",\n'
+            '  "options": ["A variant", "B variant", "C variant", "D variant"],\n'
+            '  "correct_option_id": 0\n'
+            "}"
+        )
+        for model_name in MODELS_TO_TRY:
+            try:
+                model = genai.GenerativeModel(model_name)
+                response = model.generate_content(
+                    prompt,
+                    generation_config={"response_mime_type": "application/json"}
+                )
+                data = json.loads(response.text)
                 return data
-        except Exception as e:
-            logging.warning(f"Model {model_name} xatolik berdi: {e}")
-            continue
+            except Exception as e:
+                logging.warning(f"Model {model_name} xatolik berdi: {e}")
+                continue
 
-    logging.error("AI so'rovi muvaffaqiyatsiz bo'ldi. Lokal savollar bazasidan foydalanilmoqda.")
-    return None
+    # Gemini API ishlamasa yoki xato bersa -> 300 talik bazadan tasodifiy tanlash
+    logging.info("Lokal savollar bazasidan foydalanilmoqda.")
+    return random.choice(BIOLOGY_QUESTIONS)
 
-@dp.message_handler(commands=['start'])
-async def start_handler(message: types.Message):
-    await message.reply(
-        "Xush kelibsiz! Men biologiya fanidan test topshirishingizga yordam beruvchi botman.\n\n"
-        "Testni boshlash uchun /quiz buyrug'ini yuboring."
-    )
 
-@dp.message_handler(commands=['quiz'])
-async def quiz_handler(message: types.Message):
-    # Birinchi AI'dan savol olishga urinadi
-    quiz_data = get_ai_question()
+@dp.message(Command("start"))
+async def start_handler(message: Message):
+    question_data = get_ai_question()
     
-    # Agar AI javob bermasa, lokal bazadan oladi
-    if not quiz_data:
-        quiz_data = random.choice(BIOLOGY_QUESTIONS)
-
-    await bot.send_poll(
-        chat_id=message.chat.id,
-        question=quiz_data["q"],
-        options=quiz_data["o"],
-        type='quiz',
-        correct_option_id=quiz_data["c"],
+    # Poll (viktorina) ko'rinishida yuborish
+    await message.answer_poll(
+        question=question_data["question"],
+        options=question_data["options"],
+        type="quiz",
+        correct_option_id=question_data["correct_option_id"],
         is_anonymous=False
     )
 
-if __name__ == '__main__':
-    executor.start_polling(dp, skip_updates=True)
+async def main():
+    logging.info("Bot ishga tushmoqda...")
+    # Polling boshlanishidan oldin eski webhook va to'planib qolgan xabarlarni tozalash (ConflictError oldini oladi)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
