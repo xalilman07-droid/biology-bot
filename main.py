@@ -45,7 +45,7 @@ def generate_biology_quizzes():
     """
     try:
         response = ai_client.models.generate_content(
-            model="gemini-1.5-flash",
+            model="gemini-1.5-flash",  # Rasmiy va to'g'ri model nomi
             contents=prompt
         )
         text = response.text.strip()
@@ -59,7 +59,7 @@ def generate_biology_quizzes():
         if isinstance(data, list) and len(data) > 0:
             return data
         else:
-            raise ValueError("Noto'g me'yoriy ma'lumot olindi")
+            raise ValueError("Noto'g'ri ma'lumot olindi")
     except Exception as e:
         logging.error(f"Gemini API xatoligi: {e}")
         # Zaxira savollar ro'yxati (Xatolik bo'lganda ishlaydi)
