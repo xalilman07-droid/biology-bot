@@ -1,4 +1,4 @@
-aiogram==3.13.1
+aiogram>=3.13.0
 apscheduler==3.10.4
-aiohttp==3.10.5
+aiohttp>=3.10.0
 google-genai
