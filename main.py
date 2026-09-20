@@ -44,8 +44,8 @@ def generate_biology_quizzes():
     Eslatma: "c" - bu to'g'ri javobning indeksi (0, 1, 2 yoki 3).
     """
     
-    # Ishlaydigan modelni avtomatik aniqlash uchun ro'yxat
-    models_to_try = ["gemini-2.0-flash", "gemini-2.5-flash", "gemini-1.5-flash-latest"]
+    # Yangilangan va rasmiy tavsiya etilgan modellar ro'yxati
+    models_to_try = ["gemini-3.6-flash", "gemini-1.5-flash"]
     
     for model_name in models_to_try:
         try:
