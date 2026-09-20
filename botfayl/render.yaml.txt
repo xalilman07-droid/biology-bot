@@ -1,6 +1,0 @@
-services:
-  - type: web
-    name: biology-quiz-bot
-    runtime: python
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
