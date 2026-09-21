@@ -1,881 +1,526 @@
 import os
-import json
-import random
-import sqlite3
-import logging
 import asyncio
+import logging
+import sqlite3
+import random
 import hashlib
+import time
 
-from difflib import SequenceMatcher
-from aiogram import Bot, Dispatcher
+from aiohttp import web
+from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message, PollAnswer
-from google import genai
 
+from google import genai
 from questions import BIOLOGY_QUESTIONS
 
 
-# ==============================
+# =========================
 # SOZLAMALAR
-# ==============================
+# =========================
 
-TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_KEY = os.getenv("GEMINI_API_KEY")
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-DB = "biology.db"
 TEST_SIZE = 20
-
-if not TOKEN:
-    raise RuntimeError("BOT_TOKEN topilmadi!")
+DB_FILE = "questions.db"
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN topilmadi!")
 
-# ==============================
-# BOT
-# ==============================
-
-bot = Bot(TOKEN)
+bot = Bot(BOT_TOKEN)
 dp = Dispatcher()
 
-ai = genai.Client(
-    api_key=GEMINI_KEY
-) if GEMINI_KEY else None
+gemini = None
+if GEMINI_API_KEY:
+    gemini = genai.Client(api_key=GEMINI_API_KEY)
 
 
-# ==============================
+# =========================
 # DATABASE
-# ==============================
+# =========================
 
-def connect():
-    c = sqlite3.connect(
-        DB,
-        timeout=30
-    )
-    c.execute("PRAGMA journal_mode=WAL")
-    return c
-
-
-def init_db():
-
-    c = connect()
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS used (
-        user_id INTEGER,
-        qhash TEXT,
-        question TEXT,
-        PRIMARY KEY(user_id, qhash)
-    )
+def db():
+    con = sqlite3.connect(DB_FILE)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS used_questions (
+            user_id INTEGER,
+            question_hash TEXT,
+            question TEXT,
+            PRIMARY KEY(user_id, question_hash)
+        )
     """)
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS sessions (
-        user_id INTEGER PRIMARY KEY,
-        data TEXT
-    )
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS sessions (
+            user_id INTEGER PRIMARY KEY,
+            questions TEXT,
+            current INTEGER,
+            score INTEGER
+        )
     """)
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS polls (
-        poll_id TEXT PRIMARY KEY,
-        user_id INTEGER,
-        question_index INTEGER,
-        correct INTEGER,
-        explanation TEXT
-    )
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS polls (
+            poll_id TEXT PRIMARY KEY,
+            user_id INTEGER
+        )
     """)
+    con.commit()
+    return con
 
-    c.commit()
-    c.close()
 
-
-def qhash(q):
+def qhash(text):
     return hashlib.sha256(
-        " ".join(
-            q.lower().split()
-        ).encode()
+        text.strip().lower().encode("utf-8")
     ).hexdigest()
 
 
-def used(user_id, q):
-
-    c = connect()
-
-    r = c.execute(
-        """
-        SELECT 1 FROM used
-        WHERE user_id=? AND qhash=?
-        """,
-        (user_id, qhash(q))
-    ).fetchone()
-
-    c.close()
-
-    return r is not None
-
-
-def save_used(user_id, q):
-
-    c = connect()
-
-    c.execute(
-        """
-        INSERT OR IGNORE INTO used
-        VALUES (?, ?, ?)
-        """,
-        (
-            user_id,
-            qhash(q),
-            q
-        )
-    )
-
-    c.commit()
-    c.close()
-
-
-def old_questions(user_id):
-
-    c = connect()
-
-    rows = c.execute(
-        """
-        SELECT question FROM used
-        WHERE user_id=?
-        """,
+def get_used(user_id):
+    con = db()
+    rows = con.execute(
+        "SELECT question FROM used_questions WHERE user_id=?",
         (user_id,)
     ).fetchall()
-
-    c.close()
-
-    return [x[0] for x in rows]
+    con.close()
+    return {x[0] for x in rows}
 
 
-# ==============================
-# SESSION
-# ==============================
-
-def save_session(user_id, data):
-
-    c = connect()
-
-    c.execute(
-        """
-        INSERT OR REPLACE INTO sessions
-        VALUES (?, ?)
-        """,
-        (
-            user_id,
-            json.dumps(
-                data,
-                ensure_ascii=False
-            )
-        )
+def save_used(user_id, question):
+    con = db()
+    con.execute(
+        "INSERT OR IGNORE INTO used_questions VALUES (?, ?, ?)",
+        (user_id, qhash(question), question)
     )
+    con.commit()
+    con.close()
 
-    c.commit()
-    c.close()
+
+def save_session(user_id, questions, current=0, score=0):
+    con = db()
+    con.execute(
+        "INSERT OR REPLACE INTO sessions VALUES (?, ?, ?, ?)",
+        (user_id, str(questions), current, score)
+    )
+    con.commit()
+    con.close()
 
 
-def load_session(user_id):
-
-    c = connect()
-
-    r = c.execute(
-        """
-        SELECT data FROM sessions
-        WHERE user_id=?
-        """,
+def delete_session(user_id):
+    con = db()
+    con.execute(
+        "DELETE FROM sessions WHERE user_id=?",
         (user_id,)
-    ).fetchone()
-
-    c.close()
-
-    if not r:
-        return None
-
-    try:
-        return json.loads(r[0])
-    except:
-        return None
-
-
-# ==============================
-# SAVOL TEKSHIRISH
-# ==============================
-
-def similar(a, b, limit=0.82):
-
-    return SequenceMatcher(
-        None,
-        a.lower(),
-        b.lower()
-    ).ratio() >= limit
-
-
-def valid(x):
-
-    if not isinstance(x, dict):
-        return None
-
-    q = str(
-        x.get("question", "")
-    ).strip()
-
-    options = x.get("options")
-    correct = x.get(
-        "correct_option_id"
     )
+    con.commit()
+    con.close()
 
-    if (
-        not q
-        or not isinstance(options, list)
-        or len(options) != 4
-        or correct not in range(4)
-    ):
-        return None
 
-    options = [
-        str(x).strip()
-        for x in options
+# =========================
+# LOCAL SAVOLLAR
+# =========================
+
+def local_questions(user_id):
+    used = get_used(user_id)
+
+    available = [
+        q for q in BIOLOGY_QUESTIONS
+        if q.get("q") not in used
     ]
 
-    if len(set(options)) != 4:
-        return None
+    random.shuffle(available)
 
-    return {
-        "question": q,
-        "options": options,
-        "correct_option_id": correct,
-        "explanation": str(
-            x.get(
-                "explanation",
-                "Biologik izoh mavjud emas."
-            )
-        )
-    }
+    result = []
 
+    for q in available:
+        if len(result) >= TEST_SIZE:
+            break
 
-def shuffle_question(q):
+        result.append({
+            "question": q["q"],
+            "options": q["o"],
+            "correct_option_id": q["c"],
+            "explanation": "Bu savol mahalliy biologiya savollar bazasidan olindi."
+        })
 
-    q = dict(q)
-
-    correct = q[
-        "options"
-    ][
-        q["correct_option_id"]
-    ]
-
-    random.shuffle(
-        q["options"]
-    )
-
-    q[
-        "correct_option_id"
-    ] = q["options"].index(
-        correct
-    )
-
-    return q
+    return result
 
 
-# ==============================
+# =========================
 # GEMINI
-# ==============================
+# =========================
 
-def gemini_questions(
-    user_id,
-    amount,
-    current
-):
-
-    if not ai:
+def gemini_questions(user_id, count):
+    if not gemini:
         return []
 
-    old = old_questions(
-        user_id
-    ) + current
+    used = list(get_used(user_id))[-100:]
 
     prompt = f"""
-Biologiyadan {amount} ta murakkab
-test savoli yarat.
+Biologiya fanidan {count} ta yangi test savoli yarat.
 
-Mavzularni aralashtir:
-genetika, hujayra, molekulyar biologiya,
-biokimyo, anatomiya, fiziologiya,
-botanika, mikrobiologiya, ekologiya,
-evolyutsiya.
+Talablar:
+- Har bir savolda 4 ta variant bo'lsin.
+- Faqat bitta to'g'ri javob bo'lsin.
+- Savollar bir-biridan farqli bo'lsin.
+- Oldin ishlatilgan savollarni takrorlama.
+- Savollar o'zbek tilida bo'lsin.
+- Savol ilmiy jihatdan to'g'ri bo'lsin.
+- Har bir savol uchun qisqa izoh yoz.
 
-Har birida:
-- 4 variant
-- faqat 1 to'g'ri javob
-- ilmiy izoh
-
-Bu savollarni takrorlama:
-
-{chr(10).join(old[-100:])}
-
-Faqat JSON ARRAY:
+Javobni FAQAT JSON array ko'rinishida ber:
 
 [
-{{
-"question":"...",
-"options":["...","...","...","..."],
-"correct_option_id":0,
-"explanation":"..."
-}}
+  {{
+    "question": "...",
+    "options": ["...", "...", "...", "..."],
+    "correct_option_id": 0,
+    "explanation": "..."
+  }}
 ]
+
+Oldin ishlatilgan savollar:
+{used}
 """
 
-    for attempt in range(3):
-
+    for attempt in range(2):
         try:
-
-            r = ai.models.generate_content(
+            response = gemini.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=prompt
             )
 
-            text = r.text.strip()
+            text = response.text.strip()
 
-            a = text.find("[")
-            b = text.rfind("]")
+            if text.startswith("```"):
+                text = text.replace("```json", "")
+                text = text.replace("```", "")
+                text = text.strip()
 
-            if a < 0 or b < 0:
-                continue
-
-            data = json.loads(
-                text[a:b + 1]
-            )
+            import json
+            data = json.loads(text)
 
             result = []
 
-            for x in data:
-
-                x = valid(x)
-
-                if not x:
-                    continue
-
-                q = x["question"]
-
-                if used(user_id, q):
-                    continue
-
-                if any(
-                    similar(q, z)
-                    for z in old + [
-                        y["question"]
-                        for y in result
-                    ]
+            for q in data:
+                if (
+                    isinstance(q.get("question"), str)
+                    and len(q.get("options", [])) == 4
+                    and isinstance(q.get("correct_option_id"), int)
+                    and 0 <= q["correct_option_id"] <= 3
                 ):
-                    continue
+                    result.append(q)
 
-                result.append(x)
-
-                if len(result) == amount:
-                    break
-
-            return result
+            return result[:count]
 
         except Exception as e:
-
-            logging.warning(
-                "Gemini xatosi: %s",
-                e
-            )
-
-            time = 2 ** attempt
-            asyncio.run(
-                asyncio.sleep(time)
-            )
+            logging.error("Gemini xatosi: %s", e)
+            time.sleep(2)
 
     return []
 
 
-# ==============================
-# LOCAL SAVOLLAR
-# ==============================
-
-def local_questions(
-    user_id,
-    amount,
-    current
-):
-
-    old = old_questions(
-        user_id
-    ) + current
-
-    questions = list(
-        BIOLOGY_QUESTIONS
-    )
-
-    random.shuffle(
-        questions
-    )
-
-    result = []
-
-    for x in questions:
-
-        q = x.get("q")
-        options = x.get("o")
-        correct = x.get("c")
-
-        if (
-            not q
-            or not isinstance(options, list)
-            or len(options) != 4
-            or correct not in range(4)
-        ):
-            continue
-
-        if used(user_id, q):
-            continue
-
-        if any(
-            similar(q, z)
-            for z in old
-        ):
-            continue
-
-        result.append({
-            "question": q,
-            "options": list(options),
-            "correct_option_id": correct,
-            "explanation": x.get(
-                "e",
-                "Bu savol biologiya bazasidan olindi."
-            )
-        })
-
-        old.append(q)
-
-        if len(result) >= amount:
-            break
-
-    return result
-
-
-# ==============================
+# =========================
 # TEST YARATISH
-# ==============================
+# =========================
 
-async def make_test(user_id):
-
+def make_test(user_id):
     result = []
 
-    # Gemini
-    if ai:
-
-        for _ in range(4):
-
-            need = min(
-                5,
-                TEST_SIZE - len(result)
-            )
-
-            if need <= 0:
-                break
-
-            batch = await asyncio.to_thread(
-                gemini_questions,
-                user_id,
-                need,
-                [
-                    x["question"]
-                    for x in result
-                ]
-            )
-
-            for q in batch:
-                result.append(
-                    shuffle_question(q)
-                )
-
-    # Local baza
-    if len(result) < TEST_SIZE:
-
-        need = (
-            TEST_SIZE
-            - len(result)
-        )
-
-        local = await asyncio.to_thread(
-            local_questions,
-            user_id,
-            need,
-            [
-                x["question"]
-                for x in result
-            ]
-        )
-
-        for q in local:
-            result.append(
-                shuffle_question(q)
-            )
-
-    if len(result) < TEST_SIZE:
-        return None
-
-    random.shuffle(result)
-
-    return result
-
-
-# ==============================
-# POLL YUBORISH
-# ==============================
-
-async def send_question(user_id):
-
-    session = load_session(
-        user_id
+    # Avval Gemini
+    result.extend(
+        gemini_questions(user_id, TEST_SIZE)
     )
 
-    if not session:
-        return
+    # Yetishmasa local baza
+    if len(result) < TEST_SIZE:
+        local = local_questions(user_id)
 
-    index = session["current"]
-
-    if index >= TEST_SIZE:
-
-        await finish(user_id)
-        return
-
-    q = session[
-        "questions"
-    ][index]
-
-    for attempt in range(3):
-
-        try:
-
-            poll = await bot.send_poll(
-
-                user_id,
-
-                (
-                    f"🧬 SAVOL "
-                    f"{index + 1}/{TEST_SIZE}\n\n"
-                    + q["question"]
-                ),
-
-                q["options"],
-
-                type="quiz",
-
-                correct_option_id=
-                q["correct_option_id"],
-
-                is_anonymous=False
-            )
-
-            if not poll.poll:
-                raise Exception(
-                    "Poll yaratilmadi"
-                )
-
-            c = connect()
-
-            c.execute(
-                """
-                INSERT OR REPLACE INTO polls
-                VALUES (?, ?, ?, ?, ?)
-                """,
-                (
-                    poll.poll.id,
-                    user_id,
-                    index,
-                    q["correct_option_id"],
-                    q["explanation"]
-                )
-            )
-
-            c.commit()
-            c.close()
-
-            # Faqat muvaffaqiyatli yuborilgandan keyin
-            # savol ishlatilgan deb belgilanadi.
-            save_used(
-                user_id,
-                q["question"]
-            )
-
-            return
-
-        except Exception as e:
-
-            logging.warning(
-                "Poll xatosi %s/3: %s",
-                attempt + 1,
-                e
-            )
-
-            await asyncio.sleep(
-                2 ** attempt
-            )
-
-
-# ==============================
-# START
-# ==============================
-
-@dp.message(
-    Command("start")
-)
-async def start(
-    message: Message
-):
-
-    user_id = message.from_user.id
-
-    await message.answer(
-        "🧬 BIOLOGIYA QUIZ\n\n"
-        "⏳ 20 ta yangi savol "
-        "tayyorlanmoqda..."
-    )
-
-    try:
-
-        questions = await make_test(
-            user_id
-        )
-
-        if not questions:
-
-            await message.answer(
-                "❌ Hozircha 20 ta yangi "
-                "savol tayyorlab bo'lmadi."
-            )
-            return
-
-        session = {
-            "questions": questions,
-            "current": 0,
-            "score": 0,
-            "finished": False
+        existing = {
+            q["question"].strip().lower()
+            for q in result
         }
 
-        save_session(
-            user_id,
-            session
-        )
+        for q in local:
+            if q["question"].strip().lower() not in existing:
+                result.append(q)
+                existing.add(q["question"].strip().lower())
 
-        await message.answer(
-            "✅ TEST TAYYOR!\n\n"
-            "🚀 Boshladik!\n"
-            "Javob berganingizdan keyin "
-            "keyingi savol avtomatik chiqadi."
-        )
+            if len(result) >= TEST_SIZE:
+                break
 
-        await send_question(
-            user_id
-        )
+    # Variantlarni aralashtirish
+    for q in result:
+        correct = q["options"][q["correct_option_id"]]
 
-    except Exception as e:
+        random.shuffle(q["options"])
 
-        logging.exception(
-            "START xatosi: %s",
-            e
-        )
+        q["correct_option_id"] = q["options"].index(correct)
 
-        await message.answer(
-            "⚠️ Vaqtinchalik xatolik.\n"
-            "Birozdan keyin /start bosing."
-        )
+    return result[:TEST_SIZE]
 
 
-# ==============================
-# POLL JAVOBI
-# ==============================
+# =========================
+# SAVOL YUBORISH
+# =========================
 
-@dp.poll_answer()
-async def answer(
-    poll: PollAnswer
-):
-
-    c = connect()
-
-    row = c.execute(
-        """
-        SELECT
-            user_id,
-            question_index,
-            correct,
-            explanation
-        FROM polls
-        WHERE poll_id=?
-        """,
-        (poll.poll_id,)
+async def send_question(user_id):
+    con = db()
+    row = con.execute(
+        "SELECT questions, current, score FROM sessions WHERE user_id=?",
+        (user_id,)
     ).fetchone()
-
-    c.close()
+    con.close()
 
     if not row:
         return
 
-    user_id, index, correct, explanation = row
+    import ast
 
-    if poll.user.id != user_id:
+    questions = ast.literal_eval(row[0])
+    current = row[1]
+    score = row[2]
+
+    if current >= len(questions):
+        await finish_test(user_id, score, len(questions))
         return
 
-    session = load_session(
-        user_id
-    )
+    q = questions[current]
 
-    if not session:
-        return
+    for attempt in range(3):
+        try:
+            poll = await bot.send_poll(
+                chat_id=user_id,
+                question=f"{current + 1}/{len(questions)}. {q['question']}",
+                options=q["options"],
+                type="quiz",
+                correct_option_id=q["correct_option_id"],
+                is_anonymous=False
+            )
 
-    if session["current"] != index:
-        return
+            con = db()
+            con.execute(
+                "INSERT OR REPLACE INTO polls VALUES (?, ?)",
+                (poll.poll.id, user_id)
+            )
+            con.commit()
+            con.close()
 
-    selected = (
-        poll.option_ids[0]
-        if poll.option_ids
-        else -1
-    )
+            save_used(user_id, q["question"])
+            return
 
-    if selected == correct:
-
-        session["score"] += 1
-
-        text = "✅ TO'G'RI JAVOB!"
-
-    else:
-
-        text = "❌ NOTO'G'RI JAVOB!"
-
-    text += (
-        f"\n\n📊 Natija: "
-        f"{session['score']}/{index + 1}"
-    )
-
-    if explanation:
-        text += (
-            "\n\n💡 IZOH:\n"
-            + explanation
-        )
+        except Exception as e:
+            logging.error(
+                "Savol yuborishda xato (%s/3): %s",
+                attempt + 1,
+                e
+            )
+            await asyncio.sleep(2)
 
     await bot.send_message(
         user_id,
-        text
+        "⚠️ Savolni yuborishda vaqtinchalik xatolik yuz berdi. "
+        "Iltimos, birozdan keyin /start bosing."
     )
 
-    c = connect()
 
-    c.execute(
+# =========================
+# START
+# =========================
+
+@dp.message(Command("start"))
+async def start(message: Message):
+    user_id = message.from_user.id
+
+    await message.answer(
+        "🧬 Biologiya testi tayyorlanmoqda...\n"
+        "20 ta savol tayyorlayapman."
+    )
+
+    questions = await asyncio.to_thread(
+        make_test,
+        user_id
+    )
+
+    if not questions:
+        await message.answer(
+            "❌ Hozircha savollar tayyor bo'lmadi. "
+            "Keyinroq yana /start bosing."
+        )
+        return
+
+    save_session(user_id, questions, 0, 0)
+
+    await send_question(user_id)
+
+
+# =========================
+# POLL JAVOBI
+# =========================
+
+@dp.poll_answer()
+async def poll_answer(answer: PollAnswer):
+    poll_id = answer.poll_id
+
+    con = db()
+    row = con.execute(
+        "SELECT user_id FROM polls WHERE poll_id=?",
+        (poll_id,)
+    ).fetchone()
+    con.close()
+
+    if not row:
+        return
+
+    user_id = row[0]
+
+    con = db()
+    row = con.execute(
+        "SELECT questions, current, score FROM sessions WHERE user_id=?",
+        (user_id,)
+    ).fetchone()
+    con.close()
+
+    if not row:
+        return
+
+    import ast
+
+    questions = ast.literal_eval(row[0])
+    current = row[1]
+    score = row[2]
+
+    q = questions[current]
+
+    if answer.option_ids:
+        if answer.option_ids[0] == q["correct_option_id"]:
+            score += 1
+            await bot.send_message(
+                user_id,
+                "✅ To'g'ri!\n\n"
+                f"💡 Izoh: {q.get('explanation', '')}"
+            )
+        else:
+            correct = q["options"][q["correct_option_id"]]
+
+            await bot.send_message(
+                user_id,
+                f"❌ Noto'g'ri.\n"
+                f"✅ To'g'ri javob: {correct}\n\n"
+                f"💡 Izoh: {q.get('explanation', '')}"
+            )
+
+    current += 1
+
+    con = db()
+    con.execute(
+        "UPDATE sessions SET current=?, score=? WHERE user_id=?",
+        (current, score, user_id)
+    )
+    con.commit()
+    con.close()
+
+    con = db()
+    con.execute(
         "DELETE FROM polls WHERE poll_id=?",
-        (poll.poll_id,)
+        (poll_id,)
     )
+    con.commit()
+    con.close()
 
-    c.commit()
-    c.close()
+    await asyncio.sleep(0.5)
 
-    session["current"] += 1
-
-    save_session(
-        user_id,
-        session
-    )
-
-    await asyncio.sleep(1)
-
-    if session["current"] >= TEST_SIZE:
-        await finish(user_id)
+    if current >= len(questions):
+        await finish_test(user_id, score, len(questions))
     else:
         await send_question(user_id)
 
 
-# ==============================
-# FINISH
-# ==============================
+# =========================
+# YAKUN
+# =========================
 
-async def finish(user_id):
-
-    session = load_session(
-        user_id
-    )
-
-    if not session:
-        return
-
-    if session.get("finished"):
-        return
-
-    session["finished"] = True
-
-    score = session["score"]
-
-    percent = round(
-        score / TEST_SIZE * 100
-    )
-
-    save_session(
-        user_id,
-        session
-    )
+async def finish_test(user_id, score, total):
+    percent = round(score / total * 100)
 
     await bot.send_message(
         user_id,
-        "🏆 TEST YAKUNLANDI!\n\n"
-        f"🧬 Natija: "
-        f"{score}/{TEST_SIZE}\n"
+        "🎉 Test yakunlandi!\n\n"
+        f"📊 Natija: {score}/{total}\n"
         f"📈 Foiz: {percent}%\n\n"
-        "🔄 Yangi test uchun "
-        "/start bosing."
+        "🔄 Yangi test uchun /start bosing."
+    )
+
+    delete_session(user_id)
+
+
+# =========================
+# RENDER HEALTH SERVER
+# =========================
+
+async def health(request):
+    return web.Response(
+        text="Biology Bot is running ✅"
     )
 
 
-# ==============================
-# MAIN
-# ==============================
+async def start_web_server():
+    app = web.Application()
+    app.router.add_get("/", health)
+    app.router.add_get("/health", health)
 
-async def main():
+    runner = web.AppRunner(app)
+    await runner.setup()
 
-    init_db()
+    port = int(os.getenv("PORT", "10000"))
+
+    site = web.TCPSite(
+        runner,
+        "0.0.0.0",
+        port
+    )
+
+    await site.start()
 
     logging.info(
-        "🧬 BIOLOGY BOT ISHLAYAPTI"
+        "Health server: http://0.0.0.0:%s",
+        port
     )
 
+
+# =========================
+# MAIN
+# =========================
+
+async def main():
+    db()
+
+    await start_web_server()
+
+    logging.info("🚀 Biology bot ishga tushdi!")
+
     while True:
-
         try:
-
             await bot.delete_webhook(
                 drop_pending_updates=False
             )
 
             await dp.start_polling(
-                bot
+                bot,
+                handle_signals=False
             )
 
-        except asyncio.CancelledError:
-
-            break
-
         except Exception as e:
-
-            logging.exception(
-                "BOT TO'XTADI: %s",
+            logging.error(
+                "Polling xatosi: %s",
                 e
             )
 
-            logging.info(
-                "10 soniyadan keyin "
-                "qayta ishga tushadi..."
-            )
-
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
 
 
 if __name__ == "__main__":
-
     asyncio.run(main())
