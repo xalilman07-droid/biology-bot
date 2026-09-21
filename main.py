@@ -1,567 +1,415 @@
 import os
 import json
-import logging
 import random
-import asyncio
 import sqlite3
+import logging
+import asyncio
 import hashlib
-from difflib import SequenceMatcher
 
+from difflib import SequenceMatcher
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
 from aiogram.types import Message, PollAnswer
-
 from google import genai
+
 from questions import BIOLOGY_QUESTIONS
 
 
-# =========================================================
+# ==============================
 # SOZLAMALAR
-# =========================================================
+# ==============================
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+TOKEN = os.getenv("BOT_TOKEN")
+GEMINI_KEY = os.getenv("GEMINI_API_KEY")
 
-DB_FILE = "questions.db"
-
+DB = "biology.db"
 TEST_SIZE = 20
-BATCH_SIZE = 5
+
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN topilmadi!")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(message)s"
 )
 
-if not BOT_TOKEN:
-    raise RuntimeError("BOT_TOKEN topilmadi!")
 
+# ==============================
+# BOT
+# ==============================
 
-# =========================================================
-# GEMINI
-# =========================================================
-
-ai_client = None
-
-if GEMINI_API_KEY:
-    ai_client = genai.Client(
-        api_key=GEMINI_API_KEY
-    )
-
-
-# =========================================================
-# TELEGRAM
-# =========================================================
-
-bot = Bot(token=BOT_TOKEN)
+bot = Bot(TOKEN)
 dp = Dispatcher()
 
-
-# =========================================================
-# TEST SESSIYALARI
-# =========================================================
-
-sessions = {}
-
-poll_data = {}
+ai = genai.Client(
+    api_key=GEMINI_KEY
+) if GEMINI_KEY else None
 
 
-# =========================================================
+# ==============================
 # DATABASE
-# =========================================================
+# ==============================
+
+def connect():
+    c = sqlite3.connect(
+        DB,
+        timeout=30
+    )
+    c.execute("PRAGMA journal_mode=WAL")
+    return c
+
 
 def init_db():
 
-    conn = sqlite3.connect(DB_FILE)
+    c = connect()
 
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS used_questions (
-            user_id INTEGER NOT NULL,
-            question_hash TEXT NOT NULL,
-            question TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (user_id, question_hash)
-        )
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS used (
+        user_id INTEGER,
+        qhash TEXT,
+        question TEXT,
+        PRIMARY KEY(user_id, qhash)
+    )
     """)
 
-    conn.commit()
-    conn.close()
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS sessions (
+        user_id INTEGER PRIMARY KEY,
+        data TEXT
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS polls (
+        poll_id TEXT PRIMARY KEY,
+        user_id INTEGER,
+        question_index INTEGER,
+        correct INTEGER,
+        explanation TEXT
+    )
+    """)
+
+    c.commit()
+    c.close()
 
 
-def normalize_question(text):
-
-    text = str(text).lower().strip()
-
-    for char in ".,!?;:()[]{}\"'`":
-        text = text.replace(char, "")
-
-    return " ".join(text.split())
-
-
-def question_hash(text):
-
+def qhash(q):
     return hashlib.sha256(
-        normalize_question(text).encode("utf-8")
+        " ".join(
+            q.lower().split()
+        ).encode()
     ).hexdigest()
 
 
-def is_question_used(user_id, question):
+def used(user_id, q):
 
-    conn = sqlite3.connect(DB_FILE)
+    c = connect()
 
-    result = conn.execute(
+    r = c.execute(
         """
-        SELECT 1
-        FROM used_questions
-        WHERE user_id = ?
-        AND question_hash = ?
+        SELECT 1 FROM used
+        WHERE user_id=? AND qhash=?
         """,
-        (
-            user_id,
-            question_hash(question)
-        )
+        (user_id, qhash(q))
     ).fetchone()
 
-    conn.close()
+    c.close()
 
-    return result is not None
+    return r is not None
 
 
-def save_question(user_id, question):
+def save_used(user_id, q):
 
-    conn = sqlite3.connect(DB_FILE)
+    c = connect()
 
-    conn.execute(
+    c.execute(
         """
-        INSERT OR IGNORE INTO used_questions
-        (user_id, question_hash, question)
+        INSERT OR IGNORE INTO used
         VALUES (?, ?, ?)
         """,
         (
             user_id,
-            question_hash(question),
-            question
+            qhash(q),
+            q
         )
     )
 
-    conn.commit()
-    conn.close()
+    c.commit()
+    c.close()
 
 
-def get_old_questions(user_id, limit=100):
+def old_questions(user_id):
 
-    conn = sqlite3.connect(DB_FILE)
+    c = connect()
 
-    rows = conn.execute(
+    rows = c.execute(
         """
-        SELECT question
-        FROM used_questions
-        WHERE user_id = ?
-        ORDER BY created_at DESC
-        LIMIT ?
+        SELECT question FROM used
+        WHERE user_id=?
+        """,
+        (user_id,)
+    ).fetchall()
+
+    c.close()
+
+    return [x[0] for x in rows]
+
+
+# ==============================
+# SESSION
+# ==============================
+
+def save_session(user_id, data):
+
+    c = connect()
+
+    c.execute(
+        """
+        INSERT OR REPLACE INTO sessions
+        VALUES (?, ?)
         """,
         (
             user_id,
-            limit
+            json.dumps(
+                data,
+                ensure_ascii=False
+            )
         )
-    ).fetchall()
-
-    conn.close()
-
-    return [
-        row[0]
-        for row in rows
-    ]
-
-
-# =========================================================
-# O'XSHASHLIK
-# =========================================================
-
-def is_similar_question(
-    new_question,
-    old_questions,
-    threshold=0.82
-):
-
-    new_text = normalize_question(
-        new_question
     )
 
-    for old_question in old_questions:
-
-        old_text = normalize_question(
-            old_question
-        )
-
-        similarity = SequenceMatcher(
-            None,
-            new_text,
-            old_text
-        ).ratio()
-
-        if similarity >= threshold:
-            return True
-
-    return False
+    c.commit()
+    c.close()
 
 
-# =========================================================
-# SAVOLNI TEKSHIRISH
-# =========================================================
+def load_session(user_id):
 
-def validate_question(item):
+    c = connect()
 
-    if not isinstance(item, dict):
+    r = c.execute(
+        """
+        SELECT data FROM sessions
+        WHERE user_id=?
+        """,
+        (user_id,)
+    ).fetchone()
+
+    c.close()
+
+    if not r:
         return None
 
-    question = str(
-        item.get(
-            "question",
-            ""
-        )
+    try:
+        return json.loads(r[0])
+    except:
+        return None
+
+
+# ==============================
+# SAVOL TEKSHIRISH
+# ==============================
+
+def similar(a, b, limit=0.82):
+
+    return SequenceMatcher(
+        None,
+        a.lower(),
+        b.lower()
+    ).ratio() >= limit
+
+
+def valid(x):
+
+    if not isinstance(x, dict):
+        return None
+
+    q = str(
+        x.get("question", "")
     ).strip()
 
-    options = item.get(
-        "options"
-    )
-
-    correct = item.get(
+    options = x.get("options")
+    correct = x.get(
         "correct_option_id"
     )
 
-    explanation = str(
-        item.get(
-            "explanation",
-            "To'g'ri javobning biologik izohi."
-        )
-    ).strip()
-
-    if not question:
-        return None
-
-    if not isinstance(
-        options,
-        list
+    if (
+        not q
+        or not isinstance(options, list)
+        or len(options) != 4
+        or correct not in range(4)
     ):
-        return None
-
-    if len(options) != 4:
         return None
 
     options = [
-        str(option).strip()
-        for option in options
+        str(x).strip()
+        for x in options
     ]
-
-    if any(
-        not option
-        for option in options
-    ):
-        return None
 
     if len(set(options)) != 4:
         return None
 
-    if not isinstance(
-        correct,
-        int
-    ):
-        return None
-
-    if correct not in [
-        0,
-        1,
-        2,
-        3
-    ]:
-        return None
-
     return {
-        "question": question,
+        "question": q,
         "options": options,
         "correct_option_id": correct,
-        "explanation": explanation
+        "explanation": str(
+            x.get(
+                "explanation",
+                "Biologik izoh mavjud emas."
+            )
+        )
     }
 
 
-# =========================================================
-# VARIANTLARNI ARALASHTIRISH
-# =========================================================
+def shuffle_question(q):
 
-def shuffle_options(question_data):
+    q = dict(q)
 
-    options = list(
-        question_data["options"]
-    )
-
-    correct_id = question_data[
-        "correct_option_id"
-    ]
-
-    correct_answer = options[
-        correct_id
+    correct = q[
+        "options"
+    ][
+        q["correct_option_id"]
     ]
 
     random.shuffle(
-        options
+        q["options"]
     )
 
-    question_data["options"] = options
-
-    question_data[
+    q[
         "correct_option_id"
-    ] = options.index(
-        correct_answer
+    ] = q["options"].index(
+        correct
     )
 
-    return question_data
+    return q
 
 
-# =========================================================
-# JSON AJRATISH
-# =========================================================
+# ==============================
+# GEMINI
+# ==============================
 
-def extract_json(text):
-
-    text = text.strip()
-
-    if text.startswith("```"):
-
-        text = text.replace(
-            "```json",
-            "",
-            1
-        )
-
-        text = text.replace(
-            "```",
-            ""
-        )
-
-        text = text.strip()
-
-    # ARRAY
-    start = text.find("[")
-    end = text.rfind("]")
-
-    if (
-        start != -1
-        and end != -1
-        and end > start
-    ):
-
-        return json.loads(
-            text[start:end + 1]
-        )
-
-    # OBJECT
-    start = text.find("{")
-    end = text.rfind("}")
-
-    if (
-        start != -1
-        and end != -1
-        and end > start
-    ):
-
-        return json.loads(
-            text[start:end + 1]
-        )
-
-    raise ValueError(
-        "JSON topilmadi"
-    )
-
-
-# =========================================================
-# GEMINI'DAN 5 TA MURAKKAB SAVOL
-# =========================================================
-
-def generate_gemini_batch(
+def gemini_questions(
     user_id,
-    batch_size,
-    current_questions
+    amount,
+    current
 ):
 
-    if not ai_client:
+    if not ai:
         return []
 
-    old_questions = get_old_questions(
-        user_id,
-        80
-    )
-
-    forbidden_questions = (
-        old_questions
-        + current_questions
-    )
-
-    old_text = "\n".join(
-        f"- {q}"
-        for q in forbidden_questions[-80:]
-    )
+    old = old_questions(
+        user_id
+    ) + current
 
     prompt = f"""
-Sen OLIY DARAJADAGI professional
-biologiya test tuzuvchisan.
-
-Biologiyadan aynan {batch_size} ta
-MURAKKAB test savoli yarat.
-
-Bu oddiy yodlash savollari bo'lmasin.
-
-Savollar:
-- tahlil qilish
-- sabab-oqibatni aniqlash
-- biologik jarayonlarni taqqoslash
-- vaziyatdan xulosa chiqarish
-- tajriba natijasini tushunish
-
-kabi fikrlashni talab qilsin.
+Biologiyadan {amount} ta murakkab
+test savoli yarat.
 
 Mavzularni aralashtir:
+genetika, hujayra, molekulyar biologiya,
+biokimyo, anatomiya, fiziologiya,
+botanika, mikrobiologiya, ekologiya,
+evolyutsiya.
 
-- genetika
-- molekulyar biologiya
-- hujayra biologiyasi
-- biokimyo
-- odam fiziologiyasi
-- anatomiya
-- o'simliklar fiziologiyasi
-- mikrobiologiya
-- ekologiya
-- evolyutsiya
+Har birida:
+- 4 variant
+- faqat 1 to'g'ri javob
+- ilmiy izoh
 
-Bir xil mavzuga yopishib qolma.
+Bu savollarni takrorlama:
 
-HAR BIR SAVOLDA:
+{chr(10).join(old[-100:])}
 
-- aynan 4 ta variant
-- faqat 1 ta to'g'ri javob
-- noto'g'ri variantlar ham mantiqan ishonarli
-- ilmiy jihatdan aniq
-- qisqa ilmiy izoh
-
-Quyidagi savollarni TAKRORLAMA:
-
-{old_text}
-
-Faqat JSON ARRAY qaytar:
+Faqat JSON ARRAY:
 
 [
-  {{
-    "question": "Savol",
-    "options": [
-      "Variant 1",
-      "Variant 2",
-      "Variant 3",
-      "Variant 4"
-    ],
-    "correct_option_id": 0,
-    "explanation": "Ilmiy izoh"
-  }}
+{{
+"question":"...",
+"options":["...","...","...","..."],
+"correct_option_id":0,
+"explanation":"..."
+}}
 ]
-
-QOIDALAR:
-
-- aynan {batch_size} ta savol
-- correct_option_id 0, 1, 2 yoki 3
-- faqat bitta javob to'g'ri
-- Markdown ishlatma
-- qo'shimcha matn yozma
-- faqat JSON ARRAY qaytar
 """
 
-    try:
+    for attempt in range(3):
 
-        response = ai_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
+        try:
 
-        if not response.text:
-            return []
-
-        data = extract_json(
-            response.text
-        )
-
-        if isinstance(
-            data,
-            dict
-        ):
-            data = [data]
-
-        if not isinstance(
-            data,
-            list
-        ):
-            return []
-
-        result = []
-
-        seen = list(
-            forbidden_questions
-        )
-
-        for item in data:
-
-            question = validate_question(
-                item
+            r = ai.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
             )
 
-            if not question:
+            text = r.text.strip()
+
+            a = text.find("[")
+            b = text.rfind("]")
+
+            if a < 0 or b < 0:
                 continue
 
-            q_text = question[
-                "question"
-            ]
-
-            # Aniq takror
-            if is_question_used(
-                user_id,
-                q_text
-            ):
-                continue
-
-            # O'xshash savol
-            if is_similar_question(
-                q_text,
-                seen
-            ):
-                continue
-
-            result.append(
-                question
+            data = json.loads(
+                text[a:b + 1]
             )
 
-            seen.append(
-                q_text
+            result = []
+
+            for x in data:
+
+                x = valid(x)
+
+                if not x:
+                    continue
+
+                q = x["question"]
+
+                if used(user_id, q):
+                    continue
+
+                if any(
+                    similar(q, z)
+                    for z in old + [
+                        y["question"]
+                        for y in result
+                    ]
+                ):
+                    continue
+
+                result.append(x)
+
+                if len(result) == amount:
+                    break
+
+            return result
+
+        except Exception as e:
+
+            logging.warning(
+                "Gemini xatosi: %s",
+                e
             )
 
-            if len(result) >= batch_size:
-                break
+            time = 2 ** attempt
+            asyncio.run(
+                asyncio.sleep(time)
+            )
 
-        return result
-
-    except Exception as e:
-
-        logging.warning(
-            f"Gemini batch xatosi: {e}"
-        )
-
-        return []
+    return []
 
 
-# =========================================================
+# ==============================
 # LOCAL SAVOLLAR
-# =========================================================
+# ==============================
 
-def get_local_questions(
+def local_questions(
     user_id,
-    needed,
-    current_questions
+    amount,
+    current
 ):
+
+    old = old_questions(
+        user_id
+    ) + current
 
     questions = list(
         BIOLOGY_QUESTIONS
@@ -571,674 +419,423 @@ def get_local_questions(
         questions
     )
 
-    old_questions = get_old_questions(
-        user_id,
-        5000
-    )
-
-    forbidden = (
-        old_questions
-        + current_questions
-    )
-
     result = []
 
-    for item in questions:
+    for x in questions:
 
-        question_text = item.get(
-            "q"
-        )
+        q = x.get("q")
+        options = x.get("o")
+        correct = x.get("c")
 
-        options = item.get(
-            "o"
-        )
-
-        correct = item.get(
-            "c"
-        )
-
-        if not question_text:
-            continue
-
-        if not isinstance(
-            options,
-            list
+        if (
+            not q
+            or not isinstance(options, list)
+            or len(options) != 4
+            or correct not in range(4)
         ):
             continue
 
-        if len(options) != 4:
+        if used(user_id, q):
             continue
 
-        if correct not in [
-            0,
-            1,
-            2,
-            3
-        ]:
-            continue
-
-        if is_question_used(
-            user_id,
-            question_text
+        if any(
+            similar(q, z)
+            for z in old
         ):
             continue
 
-        if is_similar_question(
-            question_text,
-            forbidden
-        ):
-            continue
-
-        question = {
-            "question": question_text,
-
-            "options": list(
-                options
-            ),
-
+        result.append({
+            "question": q,
+            "options": list(options),
             "correct_option_id": correct,
+            "explanation": x.get(
+                "e",
+                "Bu savol biologiya bazasidan olindi."
+            )
+        })
 
-            "explanation":
-                item.get(
-                    "e",
-                    item.get(
-                        "explanation",
-                        "Bu savol biologiya bazasidan olindi."
-                    )
-                )
-        }
+        old.append(q)
 
-        question = validate_question(
-            question
-        )
-
-        if not question:
-            continue
-
-        result.append(
-            question
-        )
-
-        forbidden.append(
-            question_text
-        )
-
-        if len(result) >= needed:
+        if len(result) >= amount:
             break
 
     return result
 
 
-# =========================================================
-# 20 TA TEST YARATISH
-# =========================================================
+# ==============================
+# TEST YARATISH
+# ==============================
 
-async def build_test(user_id):
+async def make_test(user_id):
 
-    test_questions = []
+    result = []
 
-    # ==============================================
-    # GEMINI: 5 + 5 + 5 + 5 = 20
-    # ==============================================
+    # Gemini
+    if ai:
 
-    if ai_client:
+        for _ in range(4):
 
-        for batch_number in range(4):
-
-            needed = min(
-                BATCH_SIZE,
-                TEST_SIZE - len(
-                    test_questions
-                )
+            need = min(
+                5,
+                TEST_SIZE - len(result)
             )
 
-            if needed <= 0:
+            if need <= 0:
                 break
 
-            for attempt in range(3):
+            batch = await asyncio.to_thread(
+                gemini_questions,
+                user_id,
+                need,
+                [
+                    x["question"]
+                    for x in result
+                ]
+            )
 
-                batch = await asyncio.to_thread(
-                    generate_gemini_batch,
-                    user_id,
-                    needed,
-                    [
-                        q["question"]
-                        for q in test_questions
-                    ]
+            for q in batch:
+                result.append(
+                    shuffle_question(q)
                 )
 
-                if batch:
+    # Local baza
+    if len(result) < TEST_SIZE:
 
-                    for question in batch:
+        need = (
+            TEST_SIZE
+            - len(result)
+        )
 
-                        q_text = question[
-                            "question"
-                        ]
-
-                        duplicate = any(
-                            q["question"]
-                            == q_text
-                            for q in test_questions
-                        )
-
-                        if duplicate:
-                            continue
-
-                        test_questions.append(
-                            shuffle_options(
-                                question
-                            )
-                        )
-
-                    if len(batch) > 0:
-                        break
-
-                logging.info(
-                    f"Gemini "
-                    f"{batch_number + 1}-partiya "
-                    f"urinish "
-                    f"{attempt + 1}/3"
-                )
-
-    # ==============================================
-    # YETISHMAGANINI LOCAL BAZADAN OLISH
-    # ==============================================
-
-    missing = (
-        TEST_SIZE
-        - len(test_questions)
-    )
-
-    if missing > 0:
-
-        local_questions = await asyncio.to_thread(
-            get_local_questions,
+        local = await asyncio.to_thread(
+            local_questions,
             user_id,
-            missing,
+            need,
             [
-                q["question"]
-                for q in test_questions
+                x["question"]
+                for x in result
             ]
         )
 
-        for question in local_questions:
+        for q in local:
+            result.append(
+                shuffle_question(q)
+            )
 
-            test_questions.append(
-                shuffle_options(
-                    question
+    if len(result) < TEST_SIZE:
+        return None
+
+    random.shuffle(result)
+
+    return result
+
+
+# ==============================
+# POLL YUBORISH
+# ==============================
+
+async def send_question(user_id):
+
+    session = load_session(
+        user_id
+    )
+
+    if not session:
+        return
+
+    index = session["current"]
+
+    if index >= TEST_SIZE:
+
+        await finish(user_id)
+        return
+
+    q = session[
+        "questions"
+    ][index]
+
+    for attempt in range(3):
+
+        try:
+
+            poll = await bot.send_poll(
+
+                user_id,
+
+                (
+                    f"🧬 SAVOL "
+                    f"{index + 1}/{TEST_SIZE}\n\n"
+                    + q["question"]
+                ),
+
+                q["options"],
+
+                type="quiz",
+
+                correct_option_id=
+                q["correct_option_id"],
+
+                is_anonymous=False
+            )
+
+            if not poll.poll:
+                raise Exception(
+                    "Poll yaratilmadi"
+                )
+
+            c = connect()
+
+            c.execute(
+                """
+                INSERT OR REPLACE INTO polls
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    poll.poll.id,
+                    user_id,
+                    index,
+                    q["correct_option_id"],
+                    q["explanation"]
                 )
             )
 
-    # ==============================================
-    # 20 TA BO'LMASA TEST BOSHLANMAYDI
-    # ==============================================
+            c.commit()
+            c.close()
 
-    if len(test_questions) < TEST_SIZE:
+            # Faqat muvaffaqiyatli yuborilgandan keyin
+            # savol ishlatilgan deb belgilanadi.
+            save_used(
+                user_id,
+                q["question"]
+            )
 
-        logging.error(
-            f"20 ta savol yig'ilmadi: "
-            f"{len(test_questions)}/{TEST_SIZE}"
-        )
+            return
 
-        return None
+        except Exception as e:
 
-    # ==============================================
-    # SAVOLLAR TARTIBINI ARALASHTIRISH
-    # ==============================================
+            logging.warning(
+                "Poll xatosi %s/3: %s",
+                attempt + 1,
+                e
+            )
 
-    random.shuffle(
-        test_questions
-    )
-
-    # ==============================================
-    # DATABASEGA SAQLASH
-    # ==============================================
-
-    for question in test_questions:
-
-        await asyncio.to_thread(
-            save_question,
-            user_id,
-            question["question"]
-        )
-
-    return test_questions
+            await asyncio.sleep(
+                2 ** attempt
+            )
 
 
-# =========================================================
-# HOZIRGI SAVOLNI YUBORISH
-# =========================================================
-
-async def send_current_question(
-    user_id
-):
-
-    session = sessions.get(
-        user_id
-    )
-
-    if not session:
-        return
-
-    current = session[
-        "current"
-    ]
-
-    if current >= TEST_SIZE:
-
-        await finish_test(
-            user_id
-        )
-
-        return
-
-    question_data = session[
-        "questions"
-    ][current]
-
-    try:
-
-        sent = await bot.send_poll(
-
-            chat_id=user_id,
-
-            question=(
-                f"🧬 SAVOL "
-                f"{current + 1}/{TEST_SIZE}\n\n"
-                + question_data[
-                    "question"
-                ]
-            ),
-
-            options=question_data[
-                "options"
-            ],
-
-            type="quiz",
-
-            correct_option_id=
-                question_data[
-                    "correct_option_id"
-                ],
-
-            is_anonymous=False
-        )
-
-        if sent.poll:
-
-            poll_data[
-                sent.poll.id
-            ] = {
-
-                "user_id":
-                    user_id,
-
-                "question_index":
-                    current,
-
-                "correct_option_id":
-                    question_data[
-                        "correct_option_id"
-                    ],
-
-                "explanation":
-                    question_data.get(
-                        "explanation",
-                        ""
-                    ),
-
-                "answered":
-                    False
-            }
-
-    except Exception as e:
-
-        logging.error(
-            f"Savol yuborish xatosi: {e}"
-        )
-
-        await bot.send_message(
-            user_id,
-            "⚠️ Savol yuborishda xatolik yuz berdi."
-        )
-
-
-# =========================================================
-# TEST YAKUNI
-# =========================================================
-
-async def finish_test(
-    user_id
-):
-
-    session = sessions.get(
-        user_id
-    )
-
-    if not session:
-        return
-
-    if session.get(
-        "finished"
-    ):
-        return
-
-    session["finished"] = True
-
-    score = session[
-        "score"
-    ]
-
-    total = session[
-        "total"
-    ]
-
-    percent = (
-        round(
-            score / total * 100
-        )
-        if total
-        else 0
-    )
-
-    if percent >= 90:
-        emoji = "🏆"
-
-    elif percent >= 75:
-        emoji = "🎉"
-
-    elif percent >= 60:
-        emoji = "👍"
-
-    else:
-        emoji = "📚"
-
-    await bot.send_message(
-
-        user_id,
-
-        f"{emoji} TEST YAKUNLANDI!\n\n"
-
-        f"🧬 Biologiya testi\n"
-
-        f"📊 Natija: "
-        f"{score}/{total}\n"
-
-        f"📈 Foiz: "
-        f"{percent}%\n\n"
-
-        f"🔄 Yangi 20 ta savol uchun "
-        f"/start bosing."
-    )
-
-
-# =========================================================
+# ==============================
 # START
-# =========================================================
+# ==============================
 
 @dp.message(
     Command("start")
 )
-async def start_handler(
+async def start(
     message: Message
 ):
 
     user_id = message.from_user.id
 
-    # Yangi sessiya
-    sessions[user_id] = {
-
-        "questions": [],
-
-        "current": 0,
-
-        "score": 0,
-
-        "total": TEST_SIZE,
-
-        "finished": False
-    }
-
     await message.answer(
-
         "🧬 BIOLOGIYA QUIZ\n\n"
-
-        "⏳ 20 ta murakkab savol "
-        "tayyorlanmoqda...\n\n"
-
-        "🧠 Savollar tahliliy bo'ladi.\n"
-
-        "🎲 A/B/C/D variantlari "
-        "aralashtiriladi.\n"
-
-        "🚫 Savollar takrorlanmaydi."
+        "⏳ 20 ta yangi savol "
+        "tayyorlanmoqda..."
     )
 
     try:
 
-        questions = await build_test(
+        questions = await make_test(
             user_id
         )
 
         if not questions:
 
-            sessions.pop(
-                user_id,
-                None
-            )
-
             await message.answer(
-
-                "❌ 20 ta yangi savol "
-                "tayyorlab bo'lmadi.\n\n"
-
-                "Gemini vaqtincha javob "
-                "bermagan yoki lokal bazada "
-                "yetarli yangi savol qolmagan."
+                "❌ Hozircha 20 ta yangi "
+                "savol tayyorlab bo'lmadi."
             )
-
             return
 
-        sessions[user_id][
-            "questions"
-        ] = questions
+        session = {
+            "questions": questions,
+            "current": 0,
+            "score": 0,
+            "finished": False
+        }
 
-        await message.answer(
-
-            "✅ 20 TA SAVOL TAYYOR!\n\n"
-
-            "🚀 Test boshlandi.\n\n"
-
-            "Har bir javobdan keyin "
-            "keyingi savol avtomatik chiqadi.\n\n"
-
-            "Omad! 🧬🔥"
+        save_session(
+            user_id,
+            session
         )
 
-        await send_current_question(
+        await message.answer(
+            "✅ TEST TAYYOR!\n\n"
+            "🚀 Boshladik!\n"
+            "Javob berganingizdan keyin "
+            "keyingi savol avtomatik chiqadi."
+        )
+
+        await send_question(
             user_id
         )
 
     except Exception as e:
 
         logging.exception(
-            f"Test tayyorlash xatosi: {e}"
-        )
-
-        sessions.pop(
-            user_id,
-            None
+            "START xatosi: %s",
+            e
         )
 
         await message.answer(
-
-            "⚠️ Testni boshlashda "
-            "xatolik yuz berdi.\n\n"
-
-            "Birozdan keyin "
-            "/start ni qayta bosing."
+            "⚠️ Vaqtinchalik xatolik.\n"
+            "Birozdan keyin /start bosing."
         )
 
 
-# =========================================================
+# ==============================
 # POLL JAVOBI
-# =========================================================
+# ==============================
 
 @dp.poll_answer()
-async def poll_answer_handler(
-    poll_answer: PollAnswer
+async def answer(
+    poll: PollAnswer
 ):
 
-    poll_id = poll_answer.poll_id
+    c = connect()
 
-    data = poll_data.get(
-        poll_id
-    )
+    row = c.execute(
+        """
+        SELECT
+            user_id,
+            question_index,
+            correct,
+            explanation
+        FROM polls
+        WHERE poll_id=?
+        """,
+        (poll.poll_id,)
+    ).fetchone()
 
-    if not data:
+    c.close()
+
+    if not row:
         return
 
-    user_id = poll_answer.user.id
+    user_id, index, correct, explanation = row
 
-    if user_id != data[
-        "user_id"
-    ]:
+    if poll.user.id != user_id:
         return
 
-    if data[
-        "answered"
-    ]:
-        return
-
-    session = sessions.get(
+    session = load_session(
         user_id
     )
 
     if not session:
-
-        poll_data.pop(
-            poll_id,
-            None
-        )
-
         return
 
-    # Faqat joriy savol
-    if data[
-        "question_index"
-    ] != session[
-        "current"
-    ]:
-
+    if session["current"] != index:
         return
-
-    data[
-        "answered"
-    ] = True
 
     selected = (
-
-        poll_answer.option_ids[0]
-
-        if poll_answer.option_ids
-
-        else None
+        poll.option_ids[0]
+        if poll.option_ids
+        else -1
     )
-
-    correct = data[
-        "correct_option_id"
-    ]
-
-    # ==============================================
-    # NATIJA
-    # ==============================================
 
     if selected == correct:
 
-        session[
-            "score"
-        ] += 1
+        session["score"] += 1
 
-        result_text = (
-            "✅ TO'G'RI JAVOB!\n\n"
-        )
+        text = "✅ TO'G'RI JAVOB!"
 
     else:
 
-        result_text = (
-            "❌ NOTO'G'RI JAVOB!\n\n"
-        )
+        text = "❌ NOTO'G'RI JAVOB!"
 
-    result_text += (
-
-        f"📊 Hozirgi natija: "
-
-        f"{session['score']}/"
-        f"{session['current'] + 1}\n\n"
-    )
-
-    explanation = data.get(
-        "explanation",
-        ""
+    text += (
+        f"\n\n📊 Natija: "
+        f"{session['score']}/{index + 1}"
     )
 
     if explanation:
-
-        result_text += (
-
-            "💡 IZOH:\n"
-
+        text += (
+            "\n\n💡 IZOH:\n"
             + explanation
         )
 
-    try:
-
-        await bot.send_message(
-            user_id,
-            result_text
-        )
-
-    except Exception as e:
-
-        logging.warning(
-            f"Izoh yuborishda xato: {e}"
-        )
-
-    poll_data.pop(
-        poll_id,
-        None
+    await bot.send_message(
+        user_id,
+        text
     )
 
-    # ==============================================
-    # KEYINGI SAVOL
-    # ==============================================
+    c = connect()
 
-    session[
-        "current"
-    ] += 1
-
-    await asyncio.sleep(
-        1
+    c.execute(
+        "DELETE FROM polls WHERE poll_id=?",
+        (poll.poll_id,)
     )
 
-    if session[
-        "current"
-    ] >= TEST_SIZE:
+    c.commit()
+    c.close()
 
-        await finish_test(
-            user_id
-        )
+    session["current"] += 1
 
+    save_session(
+        user_id,
+        session
+    )
+
+    await asyncio.sleep(1)
+
+    if session["current"] >= TEST_SIZE:
+        await finish(user_id)
     else:
-
-        await send_current_question(
-            user_id
-        )
+        await send_question(user_id)
 
 
-# =========================================================
+# ==============================
+# FINISH
+# ==============================
+
+async def finish(user_id):
+
+    session = load_session(
+        user_id
+    )
+
+    if not session:
+        return
+
+    if session.get("finished"):
+        return
+
+    session["finished"] = True
+
+    score = session["score"]
+
+    percent = round(
+        score / TEST_SIZE * 100
+    )
+
+    save_session(
+        user_id,
+        session
+    )
+
+    await bot.send_message(
+        user_id,
+        "🏆 TEST YAKUNLANDI!\n\n"
+        f"🧬 Natija: "
+        f"{score}/{TEST_SIZE}\n"
+        f"📈 Foiz: {percent}%\n\n"
+        "🔄 Yangi test uchun "
+        "/start bosing."
+    )
+
+
+# ==============================
 # MAIN
-# =========================================================
+# ==============================
 
 async def main():
 
@@ -1248,13 +845,35 @@ async def main():
         "🧬 BIOLOGY BOT ISHLAYAPTI"
     )
 
-    await bot.delete_webhook(
-        drop_pending_updates=True
-    )
+    while True:
 
-    await dp.start_polling(
-        bot
-    )
+        try:
+
+            await bot.delete_webhook(
+                drop_pending_updates=False
+            )
+
+            await dp.start_polling(
+                bot
+            )
+
+        except asyncio.CancelledError:
+
+            break
+
+        except Exception as e:
+
+            logging.exception(
+                "BOT TO'XTADI: %s",
+                e
+            )
+
+            logging.info(
+                "10 soniyadan keyin "
+                "qayta ishga tushadi..."
+            )
+
+            await asyncio.sleep(10)
 
 
 if __name__ == "__main__":
